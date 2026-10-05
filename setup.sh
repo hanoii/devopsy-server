@@ -21,6 +21,7 @@ SETTINGS=(
   DEVOPSY_TRAEFIK_DIR DEVOPSY_TRAEFIK_REPO DEVOPSY_CLI_VERSION
   DEVOPSY_SERVER_VERSION DEVOPSY_CLOUDFLARE_DNS_API_TOKEN DEVOPSY_CERTRESOLVER
   DEVOPSY_ACMEDNS_DOMAIN DEVOPSY_ACMEDNS_IP DEVOPSY_APT_PACKAGES
+  DEVOPSY_PUBLIC_DOMAIN DEVOPSY_PUBLIC_CERTRESOLVER
 )
 
 log() { printf '\033[0;36m[devopsy-server]\033[0m %s\n' "$*"; }
@@ -56,6 +57,8 @@ load_settings() {
   DEVOPSY_CERTRESOLVER=${DEVOPSY_CERTRESOLVER:-}
   DEVOPSY_ACMEDNS_DOMAIN=${DEVOPSY_ACMEDNS_DOMAIN:-}
   DEVOPSY_ACMEDNS_IP=${DEVOPSY_ACMEDNS_IP:-}
+  DEVOPSY_PUBLIC_DOMAIN=${DEVOPSY_PUBLIC_DOMAIN:-}
+  DEVOPSY_PUBLIC_CERTRESOLVER=${DEVOPSY_PUBLIC_CERTRESOLVER:-}
   DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
   DEVOPSY_TRAEFIK_DIR=${DEVOPSY_TRAEFIK_DIR:-/srv/traefik}
   DEVOPSY_TRAEFIK_REPO=${DEVOPSY_TRAEFIK_REPO:-https://github.com/hanoii/devopsy-traefik.git}
@@ -70,6 +73,14 @@ validate_settings() {
   for pkg in $DEVOPSY_APT_PACKAGES; do
     [[ $pkg =~ $name_re ]] || die "'$pkg' in DEVOPSY_APT_PACKAGES is not a package name"
   done
+  local domain_re='^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$'
+  if [ -n "$DEVOPSY_PUBLIC_DOMAIN" ] && ! [[ $DEVOPSY_PUBLIC_DOMAIN =~ $domain_re ]]; then
+    die "DEVOPSY_PUBLIC_DOMAIN '$DEVOPSY_PUBLIC_DOMAIN' is not a domain name"
+  fi
+  case $DEVOPSY_PUBLIC_CERTRESOLVER in
+    '' | acmedns | cloudflare | none) ;;
+    *) die "DEVOPSY_PUBLIC_CERTRESOLVER must be acmedns, cloudflare or none" ;;
+  esac
 }
 
 save_settings() {
@@ -108,6 +119,11 @@ env_set() {
     { print }
     END { if (!done) print line }
   ' "$file" | write_file "$file" 600
+}
+
+# The IPv4 of the default route: the public IP on most cloud servers.
+detect_ip() {
+  ip -4 route get 1.1.1.1 | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }'
 }
 
 as_user() {
@@ -378,7 +394,7 @@ step_traefik() {
     # systemd-resolved's 127.0.0.53:53. Detected unless set.
     acmedns_ip=$DEVOPSY_ACMEDNS_IP
     if [ -z "$acmedns_ip" ]; then
-      acmedns_ip=$(ip -4 route get 1.1.1.1 | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }')
+      acmedns_ip=$(detect_ip)
     fi
     [ -n "$acmedns_ip" ] || die "traefik: could not detect the public IP, set DEVOPSY_ACMEDNS_IP"
     env_set "$dir/.devopsy/.env" DEVOPSY_ACMEDNS_IP "$acmedns_ip" || true
@@ -407,9 +423,48 @@ step_traefik() {
     chown "$DEVOPSY_USER:$DEVOPSY_USER" "$dir/.devopsy/dns.env"
   fi
 
+  # Public URLs, <project>.<domain>: devopsy-cli reads the domain from
+  # /etc/devopsy/devopsy.env. One wildcard certificate when a DNS-01 resolver
+  # is available; otherwise each URL gets its own HTTP-01 certificate.
+  local wildcard=$dir/.devopsy/mnt/dynamic/public-wildcard.yaml resolver
+  if [ -n "$DEVOPSY_PUBLIC_DOMAIN" ]; then
+    echo "DEVOPSY_PUBLIC_DOMAIN=$DEVOPSY_PUBLIC_DOMAIN" | write_file /etc/devopsy/devopsy.env 644 || true
+    resolver=$DEVOPSY_PUBLIC_CERTRESOLVER
+    if [ -z "$resolver" ]; then
+      if [ -n "$DEVOPSY_ACMEDNS_DOMAIN" ]; then
+        resolver=acmedns
+      elif [ -n "$DEVOPSY_CLOUDFLARE_DNS_API_TOKEN" ]; then
+        resolver=cloudflare
+      else
+        resolver=none
+      fi
+    fi
+    if [ "$resolver" = none ]; then
+      rm -f "$wildcard"
+    elif [ -f "$dir/.devopsy/dynamic.example/public-wildcard.yaml" ]; then
+      install -d -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir/.devopsy/mnt/dynamic"
+      sed -e "s/vm1\.example\.com/$DEVOPSY_PUBLIC_DOMAIN/g" -e "s/certResolver: acmedns/certResolver: $resolver/" \
+        "$dir/.devopsy/dynamic.example/public-wildcard.yaml" | write_file "$wildcard" 644 || true
+      chown "$DEVOPSY_USER:$DEVOPSY_USER" "$wildcard"
+    else
+      warn "traefik: this clone predates public URLs, update it: cd $dir && git pull"
+    fi
+  fi
+
   log "traefik: starting"
   (cd "$dir" && as_user devopsy up -d --wait --quiet-pull) >/dev/null
   log "traefik: running"
+
+  if [ -n "$DEVOPSY_PUBLIC_DOMAIN" ]; then
+    echo
+    echo "Public URLs: <project>.$DEVOPSY_PUBLIC_DOMAIN. Once, in the zone that contains it:"
+    echo
+    printf '  *.%s.  A   %s\n' "$DEVOPSY_PUBLIC_DOMAIN" "${DEVOPSY_ACMEDNS_IP:-$(detect_ip)}"
+    if [ "$resolver" = acmedns ]; then
+      echo
+      echo "The wildcard certificate also needs the _acme-challenge CNAME listed below."
+    fi
+  fi
 
   if [ -n "$DEVOPSY_ACMEDNS_DOMAIN" ] && [ -x "$dir/.devopsy/commands/acmedns" ]; then
     echo
