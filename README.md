@@ -59,7 +59,7 @@ and environment variables override them.
 | `DEVOPSY_AUTO_REBOOT_TIME` |         | Reboot after upgrades that need it, at this time, like `04:00`. |
 | `DEVOPSY_TRAEFIK_DIR`      | `/srv/traefik` | Where Traefik is cloned. |
 | `DEVOPSY_TRAEFIK_REPO`     | devopsy-traefik on GitHub | Use a fork. |
-| `DEVOPSY_CLI_VERSION`      | `main`  | devopsy-cli branch or tag. |
+| `DEVOPSY_CLI_VERSION`      | `latest` | devopsy-cli release to install, like `v0.1.0`. |
 | `DEVOPSY_SERVER_VERSION`   | `main`  | devopsy-server branch or tag installed as `devopsy-server`. |
 | `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13. Not saved. |
 

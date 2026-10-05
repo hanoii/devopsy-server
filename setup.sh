@@ -59,7 +59,7 @@ load_settings() {
   DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
   DEVOPSY_TRAEFIK_DIR=${DEVOPSY_TRAEFIK_DIR:-/srv/traefik}
   DEVOPSY_TRAEFIK_REPO=${DEVOPSY_TRAEFIK_REPO:-https://github.com/hanoii/devopsy-traefik.git}
-  DEVOPSY_CLI_VERSION=${DEVOPSY_CLI_VERSION:-main}
+  DEVOPSY_CLI_VERSION=${DEVOPSY_CLI_VERSION:-latest}
   DEVOPSY_SERVER_VERSION=${DEVOPSY_SERVER_VERSION:-main}
 }
 
@@ -258,7 +258,8 @@ EOF
 step_cli() {
   local tmp
   log "cli: installing devopsy ($DEVOPSY_CLI_VERSION)"
-  curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-cli/$DEVOPSY_CLI_VERSION/install.sh" \
+  # The installer always comes from main; it installs the release asked for.
+  curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh" \
     | DEVOPSY_VERSION=$DEVOPSY_CLI_VERSION DEVOPSY_INSTALL_DIR=/usr/local/bin sh >/dev/null
 
   log "cli: installing devopsy-server ($DEVOPSY_SERVER_VERSION)"
