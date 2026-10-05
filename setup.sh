@@ -20,7 +20,7 @@ SETTINGS=(
   DEVOPSY_AUTO_REBOOT_TIME DEVOPSY_ACME_EMAIL DEVOPSY_ACME_PRODUCTION
   DEVOPSY_TRAEFIK_DIR DEVOPSY_TRAEFIK_REPO DEVOPSY_CLI_VERSION
   DEVOPSY_SERVER_VERSION DEVOPSY_CLOUDFLARE_DNS_API_TOKEN DEVOPSY_CERTRESOLVER
-  DEVOPSY_ACMEDNS_DOMAIN DEVOPSY_APT_PACKAGES
+  DEVOPSY_ACMEDNS_DOMAIN DEVOPSY_ACMEDNS_IP DEVOPSY_APT_PACKAGES
 )
 
 log() { printf '\033[0;36m[devopsy-server]\033[0m %s\n' "$*"; }
@@ -55,6 +55,7 @@ load_settings() {
   DEVOPSY_CLOUDFLARE_DNS_API_TOKEN=${DEVOPSY_CLOUDFLARE_DNS_API_TOKEN:-}
   DEVOPSY_CERTRESOLVER=${DEVOPSY_CERTRESOLVER:-}
   DEVOPSY_ACMEDNS_DOMAIN=${DEVOPSY_ACMEDNS_DOMAIN:-}
+  DEVOPSY_ACMEDNS_IP=${DEVOPSY_ACMEDNS_IP:-}
   DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
   DEVOPSY_TRAEFIK_DIR=${DEVOPSY_TRAEFIK_DIR:-/srv/traefik}
   DEVOPSY_TRAEFIK_REPO=${DEVOPSY_TRAEFIK_REPO:-https://github.com/hanoii/devopsy-traefik.git}
@@ -320,7 +321,7 @@ EOF
 }
 
 step_traefik() {
-  local dir=$DEVOPSY_TRAEFIK_DIR uid gid docker_gid
+  local dir=$DEVOPSY_TRAEFIK_DIR uid gid docker_gid acmedns_ip
   command -v devopsy >/dev/null || die "traefik: devopsy is not installed, run the cli step"
   id "$DEVOPSY_USER" >/dev/null 2>&1 || die "traefik: $DEVOPSY_USER does not exist, run the user step"
 
@@ -363,6 +364,14 @@ step_traefik() {
       || warn "traefik: this clone predates acme-dns support, update it: cd $dir && git pull"
     env_set "$dir/.devopsy/.env" COMPOSE_PROFILES acmedns || true
     env_set "$dir/.devopsy/.env" DEVOPSY_ACMEDNS_DOMAIN "$DEVOPSY_ACMEDNS_DOMAIN" || true
+    # acme-dns listens on this IP only: 0.0.0.0:53 clashes with
+    # systemd-resolved's 127.0.0.53:53. Detected unless set.
+    acmedns_ip=$DEVOPSY_ACMEDNS_IP
+    if [ -z "$acmedns_ip" ]; then
+      acmedns_ip=$(ip -4 route get 1.1.1.1 | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }')
+    fi
+    [ -n "$acmedns_ip" ] || die "traefik: could not detect the public IP, set DEVOPSY_ACMEDNS_IP"
+    env_set "$dir/.devopsy/.env" DEVOPSY_ACMEDNS_IP "$acmedns_ip" || true
   fi
   chown "$DEVOPSY_USER:$DEVOPSY_USER" "$dir/.devopsy/.env"
 

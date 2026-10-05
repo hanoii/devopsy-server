@@ -51,6 +51,7 @@ and environment variables override them.
 | `DEVOPSY_CLOUDFLARE_DNS_API_TOKEN` | | Cloudflare token for Traefik's DNS-01 resolver. Writes Traefik's `dns.env` on every run. |
 | `DEVOPSY_CERTRESOLVER`     |         | Traefik's default resolver: `letsencrypt1` (HTTP-01), `acmedns` or `cloudflare` (DNS-01). Kept in sync in Traefik's `.env`. |
 | `DEVOPSY_ACMEDNS_DOMAIN`   |         | Runs acme-dns for Traefik's `acmedns` resolver on this subdomain, like `acme-vm1.example.com`. Prints the DNS records to create. |
+| `DEVOPSY_ACMEDNS_IP`       | detected | Public IPv4 acme-dns listens on. Set it when the server is behind NAT. |
 | `DEVOPSY_USER`             | `devopsy` | The deploy user. |
 | `DEVOPSY_SUDO`             | `0`     | `1` gives the deploy user passwordless sudo. |
 | `DEVOPSY_APT_PACKAGES`     |         | Extra Debian packages to install, space separated, like `htop ncdu`. Removing one from the list does not uninstall it. |
