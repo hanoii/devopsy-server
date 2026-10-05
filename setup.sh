@@ -20,7 +20,7 @@ SETTINGS=(
   DEVOPSY_AUTO_REBOOT_TIME DEVOPSY_ACME_EMAIL DEVOPSY_ACME_PRODUCTION
   DEVOPSY_TRAEFIK_DIR DEVOPSY_TRAEFIK_REPO DEVOPSY_CLI_VERSION
   DEVOPSY_SERVER_VERSION DEVOPSY_CLOUDFLARE_DNS_API_TOKEN DEVOPSY_CERTRESOLVER
-  DEVOPSY_ACMEDNS_DOMAIN
+  DEVOPSY_ACMEDNS_DOMAIN DEVOPSY_APT_PACKAGES
 )
 
 log() { printf '\033[0;36m[devopsy-server]\033[0m %s\n' "$*"; }
@@ -55,10 +55,20 @@ load_settings() {
   DEVOPSY_CLOUDFLARE_DNS_API_TOKEN=${DEVOPSY_CLOUDFLARE_DNS_API_TOKEN:-}
   DEVOPSY_CERTRESOLVER=${DEVOPSY_CERTRESOLVER:-}
   DEVOPSY_ACMEDNS_DOMAIN=${DEVOPSY_ACMEDNS_DOMAIN:-}
+  DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
   DEVOPSY_TRAEFIK_DIR=${DEVOPSY_TRAEFIK_DIR:-/srv/traefik}
   DEVOPSY_TRAEFIK_REPO=${DEVOPSY_TRAEFIK_REPO:-https://github.com/hanoii/devopsy-traefik.git}
   DEVOPSY_CLI_VERSION=${DEVOPSY_CLI_VERSION:-main}
   DEVOPSY_SERVER_VERSION=${DEVOPSY_SERVER_VERSION:-main}
+}
+
+# Rejects bad values before they are saved, so a typo does not stick.
+validate_settings() {
+  local pkg name_re='^[a-z0-9][a-z0-9.+-]*(:[a-z0-9]+)?(=[A-Za-z0-9.+:~-]+)?$'
+  # Only package names, so the value cannot smuggle apt options in.
+  for pkg in $DEVOPSY_APT_PACKAGES; do
+    [[ $pkg =~ $name_re ]] || die "'$pkg' in DEVOPSY_APT_PACKAGES is not a package name"
+  done
 }
 
 save_settings() {
@@ -121,6 +131,14 @@ step_base() {
   log "base packages"
   apt-get update -q >/dev/null
   apt_install ca-certificates curl git jq openssh-client unattended-upgrades sudo
+
+  # Extra packages, space separated (checked in validate_settings).
+  if [ -n "$DEVOPSY_APT_PACKAGES" ]; then
+    local extra
+    read -ra extra <<<"$DEVOPSY_APT_PACKAGES"
+    log "base: extra packages: ${extra[*]}"
+    apt_install "${extra[@]}"
+  fi
 }
 
 step_swap() {
@@ -425,6 +443,7 @@ main() {
     [ "$known" = 1 ] || die "unknown step '$step'. Steps: ${STEPS[*]}"
   done
   # Saved before running, so a failed run still remembers its settings.
+  validate_settings
   save_settings
   for step in "${steps[@]}"; do
     "step_${step//-/_}"

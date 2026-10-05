@@ -33,7 +33,7 @@ and environment variables override them.
 
 | Step       | What it does |
 | ---------- | ------------ |
-| `base`     | Installs curl, git, jq, openssh-client, unattended-upgrades and sudo. |
+| `base`     | Installs curl, git, jq, openssh-client, unattended-upgrades and sudo, plus `DEVOPSY_APT_PACKAGES`. |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
 | `docker`   | Docker Engine and the Compose plugin from Docker's apt repository. Rotated logs and `live-restore`. |
 | `user`     | Creates the deploy user in the `docker` group and copies root's SSH authorized keys to it. |
@@ -53,6 +53,7 @@ and environment variables override them.
 | `DEVOPSY_ACMEDNS_DOMAIN`   |         | Runs acme-dns for Traefik's `acmedns` resolver on this subdomain, like `acme-vm1.example.com`. Prints the DNS records to create. |
 | `DEVOPSY_USER`             | `devopsy` | The deploy user. |
 | `DEVOPSY_SUDO`             | `0`     | `1` gives the deploy user passwordless sudo. |
+| `DEVOPSY_APT_PACKAGES`     |         | Extra Debian packages to install, space separated, like `htop ncdu`. Removing one from the list does not uninstall it. |
 | `DEVOPSY_SWAP`             |         | Swap file size, like `2G`. |
 | `DEVOPSY_AUTO_REBOOT_TIME` |         | Reboot after upgrades that need it, at this time, like `04:00`. |
 | `DEVOPSY_TRAEFIK_DIR`      | `/srv/traefik` | Where Traefik is cloned. |
