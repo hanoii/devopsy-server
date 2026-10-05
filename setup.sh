@@ -358,10 +358,38 @@ step_traefik() {
   log "traefik: running"
 }
 
+# When run as the installed devopsy-server, replace it with the latest version
+# first and run that instead, so a stale copy never runs old steps. Piped runs
+# from curl are already current. DEVOPSY_NO_SELF_UPDATE=1 skips it.
+self_update() {
+  local installed=/usr/local/sbin/devopsy-server tmp
+  [ "$(readlink -f "$0" 2>/dev/null)" = "$installed" ] || return 0
+  [ "${DEVOPSY_NO_SELF_UPDATE:-0}" != 1 ] || return 0
+  [ -z "${DEVOPSY_SELF_UPDATED:-}" ] || return 0
+
+  tmp=$(mktemp)
+  if ! curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-server/$DEVOPSY_SERVER_VERSION/setup.sh" -o "$tmp" \
+    || ! head -n 1 "$tmp" | grep -q '^#!/usr/bin/env bash'; then
+    rm -f "$tmp"
+    warn "self-update: could not download devopsy-server ($DEVOPSY_SERVER_VERSION), running this copy"
+    return 0
+  fi
+  if cmp -s "$tmp" "$installed"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  # install writes a new file, so this running copy is not modified under bash.
+  install -m 755 "$tmp" "$installed"
+  rm -f "$tmp"
+  log "self-update: updated devopsy-server ($DEVOPSY_SERVER_VERSION), restarting"
+  DEVOPSY_SELF_UPDATED=1 exec "$installed" "$@"
+}
+
 main() {
   local steps=("$@") step s known
   preflight
   load_settings
+  self_update "$@"
   EXPLICIT_STEPS=1
   if [ ${#steps[@]} -eq 0 ]; then
     steps=("${STEPS[@]}")

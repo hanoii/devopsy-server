@@ -17,8 +17,9 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh
   | DEVOPSY_ACME_EMAIL=you@example.com bash
 ```
 
-The script installs itself as `devopsy-server`. Afterwards, rerun it or
-only some steps with:
+The script installs itself as `devopsy-server`, which updates itself to the
+latest version before each run (`DEVOPSY_NO_SELF_UPDATE=1` skips that).
+Afterwards, rerun it or only some steps with:
 
 ```sh
 devopsy-server              # everything
