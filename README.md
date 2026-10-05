@@ -33,7 +33,7 @@ and environment variables override them.
 
 | Step       | What it does |
 | ---------- | ------------ |
-| `base`     | Installs curl, git, openssh-client, unattended-upgrades and sudo. |
+| `base`     | Installs curl, git, jq, openssh-client, unattended-upgrades and sudo. |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
 | `docker`   | Docker Engine and the Compose plugin from Docker's apt repository. Rotated logs and `live-restore`. |
 | `user`     | Creates the deploy user in the `docker` group and copies root's SSH authorized keys to it. |
@@ -49,7 +49,8 @@ and environment variables override them.
 | `DEVOPSY_ACME_EMAIL`       |         | Let's Encrypt email. Required the first time `traefik` runs. |
 | `DEVOPSY_ACME_PRODUCTION`  | `0`     | `1` for real certificates. Staging otherwise. |
 | `DEVOPSY_CLOUDFLARE_DNS_API_TOKEN` | | Cloudflare token for Traefik's DNS-01 resolver. Writes Traefik's `dns.env` on every run. |
-| `DEVOPSY_CERTRESOLVER`     |         | Traefik's default resolver: `letsencrypt1` (HTTP-01) or `cloudflare` (DNS-01). Kept in sync in Traefik's `.env`. |
+| `DEVOPSY_CERTRESOLVER`     |         | Traefik's default resolver: `letsencrypt1` (HTTP-01), `acmedns` or `cloudflare` (DNS-01). Kept in sync in Traefik's `.env`. |
+| `DEVOPSY_ACMEDNS_DOMAIN`   |         | Runs acme-dns for Traefik's `acmedns` resolver on this subdomain, like `acme-vm1.example.com`. Prints the DNS records to create. |
 | `DEVOPSY_USER`             | `devopsy` | The deploy user. |
 | `DEVOPSY_SUDO`             | `0`     | `1` gives the deploy user passwordless sudo. |
 | `DEVOPSY_SWAP`             |         | Swap file size, like `2G`. |
@@ -69,7 +70,10 @@ cd /srv/traefik && git pull && devopsy restart
 
 Setting `DEVOPSY_ACME_PRODUCTION=1` later has no effect on an existing
 `.env`. Edit it and run `devopsy restart`. The Cloudflare resolver's
-`dns.env` and the default resolver follow the settings on every run.
+`dns.env`, the default resolver and acme-dns follow the settings on every
+run. With acme-dns on, each run ends with the DNS records to create; also
+`cd /srv/traefik && devopsy acmedns`. Open port 53, UDP and TCP, in your
+provider's firewall.
 
 See devopsy-traefik's README for how the two resolvers work, including DNS-01
 for domains outside Cloudflare.

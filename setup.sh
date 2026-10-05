@@ -20,6 +20,7 @@ SETTINGS=(
   DEVOPSY_AUTO_REBOOT_TIME DEVOPSY_ACME_EMAIL DEVOPSY_ACME_PRODUCTION
   DEVOPSY_TRAEFIK_DIR DEVOPSY_TRAEFIK_REPO DEVOPSY_CLI_VERSION
   DEVOPSY_SERVER_VERSION DEVOPSY_CLOUDFLARE_DNS_API_TOKEN DEVOPSY_CERTRESOLVER
+  DEVOPSY_ACMEDNS_DOMAIN
 )
 
 log() { printf '\033[0;36m[devopsy-server]\033[0m %s\n' "$*"; }
@@ -53,6 +54,7 @@ load_settings() {
   DEVOPSY_ACME_PRODUCTION=${DEVOPSY_ACME_PRODUCTION:-0}
   DEVOPSY_CLOUDFLARE_DNS_API_TOKEN=${DEVOPSY_CLOUDFLARE_DNS_API_TOKEN:-}
   DEVOPSY_CERTRESOLVER=${DEVOPSY_CERTRESOLVER:-}
+  DEVOPSY_ACMEDNS_DOMAIN=${DEVOPSY_ACMEDNS_DOMAIN:-}
   DEVOPSY_TRAEFIK_DIR=${DEVOPSY_TRAEFIK_DIR:-/srv/traefik}
   DEVOPSY_TRAEFIK_REPO=${DEVOPSY_TRAEFIK_REPO:-https://github.com/hanoii/devopsy-traefik.git}
   DEVOPSY_CLI_VERSION=${DEVOPSY_CLI_VERSION:-main}
@@ -86,6 +88,17 @@ write_file() {
   log "wrote $file"
 }
 
+# Sets KEY=value in an env file: replaces the KEY line in place, or appends
+# it. Same return convention as write_file.
+env_set() {
+  local file=$1 key=$2 value=$3
+  awk -v key="$key" -v line="$key=$value" '
+    index($0, key "=") == 1 { if (!done) print line; done = 1; next }
+    { print }
+    END { if (!done) print line }
+  ' "$file" | write_file "$file" 600
+}
+
 as_user() {
   runuser -u "$DEVOPSY_USER" -- env HOME="$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)" "$@"
 }
@@ -107,7 +120,7 @@ preflight() {
 step_base() {
   log "base packages"
   apt-get update -q >/dev/null
-  apt_install ca-certificates curl git openssh-client unattended-upgrades sudo
+  apt_install ca-certificates curl git jq openssh-client unattended-upgrades sudo
 }
 
 step_swap() {
@@ -323,12 +336,17 @@ step_traefik() {
 
   # Default resolver, kept in sync with the setting while it is set.
   if [ -n "$DEVOPSY_CERTRESOLVER" ]; then
-    {
-      grep -v '^DEVOPSY_CERTRESOLVER=' "$dir/.devopsy/.env" || true
-      echo "DEVOPSY_CERTRESOLVER=$DEVOPSY_CERTRESOLVER"
-    } | write_file "$dir/.devopsy/.env" 600 || true
-    chown "$DEVOPSY_USER:$DEVOPSY_USER" "$dir/.devopsy/.env"
+    env_set "$dir/.devopsy/.env" DEVOPSY_CERTRESOLVER "$DEVOPSY_CERTRESOLVER" || true
   fi
+
+  # The acme-dns server for the acmedns resolver, while a domain is set.
+  if [ -n "$DEVOPSY_ACMEDNS_DOMAIN" ]; then
+    [ -x "$dir/.devopsy/commands/acmedns" ] \
+      || warn "traefik: this clone predates acme-dns support, update it: cd $dir && git pull"
+    env_set "$dir/.devopsy/.env" COMPOSE_PROFILES acmedns || true
+    env_set "$dir/.devopsy/.env" DEVOPSY_ACMEDNS_DOMAIN "$DEVOPSY_ACMEDNS_DOMAIN" || true
+  fi
+  chown "$DEVOPSY_USER:$DEVOPSY_USER" "$dir/.devopsy/.env"
 
   # The Cloudflare DNS-01 resolver, managed while a token is set. Without
   # one, an existing dns.env (written by hand) is left alone.
@@ -356,6 +374,12 @@ step_traefik() {
   log "traefik: starting"
   (cd "$dir" && as_user devopsy up -d --wait --quiet-pull) >/dev/null
   log "traefik: running"
+
+  if [ -n "$DEVOPSY_ACMEDNS_DOMAIN" ] && [ -x "$dir/.devopsy/commands/acmedns" ]; then
+    echo
+    (cd "$dir" && as_user devopsy acmedns)
+    echo
+  fi
 }
 
 # When run as the installed devopsy-server, replace it with the latest version
