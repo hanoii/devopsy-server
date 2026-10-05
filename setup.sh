@@ -351,7 +351,9 @@ step_traefik() {
   else
     log "traefik: keeping the existing .devopsy/.env"
   fi
-  install -d -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir/.devopsy/mnt/letsencrypt"
+  # Owned by the deploy user, which Traefik and acme-dns run as. Docker would
+  # create missing ones as root.
+  install -d -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir/.devopsy/mnt/letsencrypt" "$dir/.devopsy/mnt/acmedns"
 
   # Default resolver, kept in sync with the setting while it is set.
   if [ -n "$DEVOPSY_CERTRESOLVER" ]; then
