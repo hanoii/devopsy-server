@@ -6,17 +6,20 @@
 #
 # Every step is idempotent: rerun the whole script, or only some steps, at any
 # time. Pass step names as arguments (`bash -s -- docker cli` when piped).
+# The cli step also installs this script as `devopsy-server`, so later runs
+# are `devopsy-server [step...]`.
 # Settings come from the environment, and are saved to $CONFIG_FILE so a rerun
 # reuses them. See README.md.
 set -euo pipefail
 
-STEPS=(base swap docker user upgrades cli traefik)
+STEPS=(base swap docker user upgrades cli traefik ci-key)
 CONFIG_FILE=/etc/devopsy/server.env
 # Settings saved to $CONFIG_FILE.
 SETTINGS=(
   DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SWAP
   DEVOPSY_AUTO_REBOOT_TIME DEVOPSY_ACME_EMAIL DEVOPSY_ACME_PRODUCTION
   DEVOPSY_TRAEFIK_DIR DEVOPSY_TRAEFIK_REPO DEVOPSY_CLI_VERSION
+  DEVOPSY_SERVER_VERSION
 )
 
 log() { printf '\033[0;36m[devopsy-server]\033[0m %s\n' "$*"; }
@@ -51,6 +54,7 @@ load_settings() {
   DEVOPSY_TRAEFIK_DIR=${DEVOPSY_TRAEFIK_DIR:-/srv/traefik}
   DEVOPSY_TRAEFIK_REPO=${DEVOPSY_TRAEFIK_REPO:-https://github.com/hanoii/devopsy-traefik.git}
   DEVOPSY_CLI_VERSION=${DEVOPSY_CLI_VERSION:-main}
+  DEVOPSY_SERVER_VERSION=${DEVOPSY_SERVER_VERSION:-main}
 }
 
 save_settings() {
@@ -101,7 +105,7 @@ preflight() {
 step_base() {
   log "base packages"
   apt-get update -q >/dev/null
-  apt_install ca-certificates curl git unattended-upgrades sudo
+  apt_install ca-certificates curl git openssh-client unattended-upgrades sudo
 }
 
 step_swap() {
@@ -218,9 +222,68 @@ EOF
 }
 
 step_cli() {
+  local tmp
   log "cli: installing devopsy ($DEVOPSY_CLI_VERSION)"
   curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-cli/$DEVOPSY_CLI_VERSION/install.sh" \
     | DEVOPSY_VERSION=$DEVOPSY_CLI_VERSION DEVOPSY_INSTALL_DIR=/usr/local/bin sh >/dev/null
+
+  log "cli: installing devopsy-server ($DEVOPSY_SERVER_VERSION)"
+  tmp=$(mktemp)
+  curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-server/$DEVOPSY_SERVER_VERSION/setup.sh" -o "$tmp"
+  head -n 1 "$tmp" | grep -q '^#!/usr/bin/env bash' || die "cli: could not download devopsy-server ($DEVOPSY_SERVER_VERSION)"
+  install -m 755 "$tmp" /usr/local/sbin/devopsy-server
+  rm -f "$tmp"
+}
+
+# An SSH key for CI to log in as the deploy user and run deployments. The
+# private key is printed when it is created, or when this step is named
+# explicitly (`devopsy-server ci-key`). It stays on the server so it can be
+# shown again; anyone with root here has the deploy user anyway.
+step_ci_key() {
+  local home key line host_key created=0
+  id "$DEVOPSY_USER" >/dev/null 2>&1 || die "ci-key: $DEVOPSY_USER does not exist, run the user step"
+  home=$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)
+  key=$home/.ssh/devopsy_ci_ed25519
+  install -d -m 700 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$home/.ssh"
+
+  if [ ! -f "$key" ]; then
+    log "ci-key: creating $key"
+    as_user ssh-keygen -q -t ed25519 -N '' -C "devopsy-ci@$(hostname)" -f "$key"
+    created=1
+  fi
+
+  # `restrict` turns off port, agent and X11 forwarding and the pty. Commands
+  # still run, which is all CI needs.
+  line="restrict $(cat "$key.pub")"
+  if ! grep -qxF "$line" "$home/.ssh/authorized_keys" 2>/dev/null; then
+    printf '%s\n' "$line" >>"$home/.ssh/authorized_keys"
+    chown "$DEVOPSY_USER:$DEVOPSY_USER" "$home/.ssh/authorized_keys"
+    chmod 600 "$home/.ssh/authorized_keys"
+    log "ci-key: authorized for $DEVOPSY_USER"
+  fi
+
+  if [ "$created" = 0 ] && [ "$EXPLICIT_STEPS" = 0 ]; then
+    log "ci-key: exists. Run 'devopsy-server ci-key' to print it."
+    return
+  fi
+
+  cat <<EOF
+
+CI deploy key for $DEVOPSY_USER@$(hostname). In GitLab, add it under
+Settings > CI/CD > Variables as a protected variable of type File, for
+example DEVOPSY_SSH_KEY. GitLab cannot mask multi-line values, so never
+echo it in a job.
+
+$(cat "$key")
+
+Host key fingerprints, to check SSH_KNOWN_HOSTS in CI. From your machine,
+'ssh-keyscan <this-server>' must print keys with these fingerprints:
+
+EOF
+  for host_key in /etc/ssh/ssh_host_*_key.pub; do
+    if [ -f "$host_key" ]; then ssh-keygen -lf "$host_key"; fi
+  done
+  echo
 }
 
 step_traefik() {
@@ -265,7 +328,11 @@ main() {
   local steps=("$@") step s known
   preflight
   load_settings
-  [ ${#steps[@]} -gt 0 ] || steps=("${STEPS[@]}")
+  EXPLICIT_STEPS=1
+  if [ ${#steps[@]} -eq 0 ]; then
+    steps=("${STEPS[@]}")
+    EXPLICIT_STEPS=0
+  fi
   for step in "${steps[@]}"; do
     known=0
     for s in "${STEPS[@]}"; do [ "$s" = "$step" ] && known=1; done
@@ -274,7 +341,7 @@ main() {
   # Saved before running, so a failed run still remembers its settings.
   save_settings
   for step in "${steps[@]}"; do
-    "step_$step"
+    "step_${step//-/_}"
   done
   log "done: ${steps[*]}"
 }

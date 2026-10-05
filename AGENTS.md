@@ -18,6 +18,8 @@ table and "Things to know".
 - No host firewall: the provider's firewall covers it. See README.md.
 - Debian 13 only. Use apt and systemd directly. No configuration management
   dependencies.
+- Only print secrets when they are created or explicitly asked for, like
+  the `ci-key` step does. A plain rerun must not print them.
 - Keep it a bootstrap. Per-project deployment belongs in projects'
   `.devopsy/`, and Traefik's setup in devopsy-traefik.
 

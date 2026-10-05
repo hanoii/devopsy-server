@@ -17,10 +17,12 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh
   | DEVOPSY_ACME_EMAIL=you@example.com bash
 ```
 
-To run only some steps, name them:
+The script installs itself as `devopsy-server`. Afterwards, rerun it or
+only some steps with:
 
 ```sh
-curl -fsSL .../setup.sh | bash -s -- docker cli
+devopsy-server              # everything
+devopsy-server docker cli   # only these steps
 ```
 
 Settings are saved to `/etc/devopsy/server.env`. Later runs reuse them,
@@ -30,13 +32,14 @@ and environment variables override them.
 
 | Step       | What it does |
 | ---------- | ------------ |
-| `base`     | Installs curl, git, unattended-upgrades and sudo. |
+| `base`     | Installs curl, git, openssh-client, unattended-upgrades and sudo. |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
 | `docker`   | Docker Engine and the Compose plugin from Docker's apt repository. Rotated logs and `live-restore`. |
 | `user`     | Creates the deploy user in the `docker` group and copies root's SSH authorized keys to it. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
-| `cli`      | Installs or updates `devopsy` in `/usr/local/bin`. |
+| `cli`      | Installs or updates `devopsy` in `/usr/local/bin`, and this script as `devopsy-server` in `/usr/local/sbin`. |
 | `traefik`  | Clones devopsy-traefik, writes its `.env` and starts it. |
+| `ci-key`   | Creates an SSH key that lets CI log in as the deploy user, and prints it. See below. |
 
 ## Settings
 
@@ -51,6 +54,7 @@ and environment variables override them.
 | `DEVOPSY_TRAEFIK_DIR`      | `/srv/traefik` | Where Traefik is cloned. |
 | `DEVOPSY_TRAEFIK_REPO`     | devopsy-traefik on GitHub | Use a fork. |
 | `DEVOPSY_CLI_VERSION`      | `main`  | devopsy-cli branch or tag. |
+| `DEVOPSY_SERVER_VERSION`   | `main`  | devopsy-server branch or tag installed as `devopsy-server`. |
 | `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13. Not saved. |
 
 The `traefik` step only writes Traefik's `.devopsy/.env` when it doesn't
@@ -62,6 +66,37 @@ cd /srv/traefik && git pull && devopsy restart
 
 Setting `DEVOPSY_ACME_PRODUCTION=1` later has no effect on an existing
 `.env`. Edit it and run `devopsy restart`.
+
+## Deploying from CI
+
+The `ci-key` step creates `~devopsy/.ssh/devopsy_ci_ed25519` and authorizes
+it for the deploy user, without port or agent forwarding. It prints the
+private key and the server's host key fingerprints the first time. Print
+them again with:
+
+```sh
+devopsy-server ci-key
+```
+
+In GitLab, under Settings > CI/CD > Variables, add:
+
+- `DEVOPSY_SSH_KEY`: the private key, type File, protected.
+- `DEVOPSY_SSH_KNOWN_HOSTS`: the output of `ssh-keyscan <server>`, type File.
+  Check its fingerprints against the ones the script printed.
+
+A job can then run devopsy on the server:
+
+```yaml
+deploy:
+  image: alpine:latest
+  script:
+    - apk add --no-cache openssh-client
+    - chmod 600 "$DEVOPSY_SSH_KEY"
+    - ssh -i "$DEVOPSY_SSH_KEY" -o UserKnownHostsFile="$DEVOPSY_SSH_KNOWN_HOSTS"
+        devopsy@your-server 'cd /srv/my-project && devopsy deploy'
+```
+
+GitLab cannot mask a multi-line key, so never print the variable in a job.
 
 ## Things to know
 
