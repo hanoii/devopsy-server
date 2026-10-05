@@ -51,7 +51,7 @@ load_settings() {
   DEVOPSY_SWAP=${DEVOPSY_SWAP:-}
   DEVOPSY_AUTO_REBOOT_TIME=${DEVOPSY_AUTO_REBOOT_TIME:-}
   DEVOPSY_ACME_EMAIL=${DEVOPSY_ACME_EMAIL:-}
-  DEVOPSY_ACME_PRODUCTION=${DEVOPSY_ACME_PRODUCTION:-0}
+  DEVOPSY_ACME_PRODUCTION=${DEVOPSY_ACME_PRODUCTION:-1}
   DEVOPSY_CLOUDFLARE_DNS_API_TOKEN=${DEVOPSY_CLOUDFLARE_DNS_API_TOKEN:-}
   DEVOPSY_CERTRESOLVER=${DEVOPSY_CERTRESOLVER:-}
   DEVOPSY_ACMEDNS_DOMAIN=${DEVOPSY_ACMEDNS_DOMAIN:-}
@@ -321,7 +321,7 @@ EOF
 }
 
 step_traefik() {
-  local dir=$DEVOPSY_TRAEFIK_DIR uid gid docker_gid acmedns_ip
+  local dir=$DEVOPSY_TRAEFIK_DIR uid gid docker_gid acmedns_ip ca
   command -v devopsy >/dev/null || die "traefik: devopsy is not installed, run the cli step"
   id "$DEVOPSY_USER" >/dev/null 2>&1 || die "traefik: $DEVOPSY_USER does not exist, run the user step"
 
@@ -340,8 +340,11 @@ step_traefik() {
     docker_gid=$(stat -c %g /var/run/docker.sock)
     {
       echo "TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT1_ACME_EMAIL=$DEVOPSY_ACME_EMAIL"
+      # Only for a new .env. Afterwards `devopsy letsencrypt` switches it.
       if [ "$DEVOPSY_ACME_PRODUCTION" = 1 ]; then
         echo "TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT1_ACME_CASERVER=https://acme-v02.api.letsencrypt.org/directory"
+      else
+        echo "TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT1_ACME_CASERVER=https://acme-staging-v02.api.letsencrypt.org/directory"
       fi
       echo "DEVOPSY_UID=$uid"
       echo "DEVOPSY_GID=$gid"
@@ -380,6 +383,8 @@ step_traefik() {
   # The Cloudflare DNS-01 resolver, managed while a token is set. Without
   # one, an existing dns.env (written by hand) is left alone.
   if [ -n "$DEVOPSY_CLOUDFLARE_DNS_API_TOKEN" ]; then
+    ca=$(sed -n 's/^TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT1_ACME_CASERVER=//p' "$dir/.devopsy/.env" | tail -n 1)
+    ca=${ca:-https://acme-staging-v02.api.letsencrypt.org/directory}
     grep -q 'dns\.env' "$dir/.devopsy/compose.yaml" \
       || warn "traefik: this clone predates dns.env support, update it: cd $dir && git pull"
     [ -n "$DEVOPSY_ACME_EMAIL" ] || die "traefik: set DEVOPSY_ACME_EMAIL for Let's Encrypt"
@@ -388,11 +393,8 @@ step_traefik() {
       echo "CF_DNS_API_TOKEN=$DEVOPSY_CLOUDFLARE_DNS_API_TOKEN"
       echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE=true"
       echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_EMAIL=$DEVOPSY_ACME_EMAIL"
-      if [ "$DEVOPSY_ACME_PRODUCTION" = 1 ]; then
-        echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_CASERVER=https://acme-v02.api.letsencrypt.org/directory"
-      else
-        echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_CASERVER=https://acme-staging-v02.api.letsencrypt.org/directory"
-      fi
+      # Same CA as the other resolvers, as `devopsy letsencrypt` last set it.
+      echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_CASERVER=$ca"
       echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_STORAGE=/letsencrypt/acme-cloudflare.json"
       echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_DNSCHALLENGE_PROVIDER=cloudflare"
       echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_DNSCHALLENGE_RESOLVERS=1.1.1.1:53,1.0.0.1:53"

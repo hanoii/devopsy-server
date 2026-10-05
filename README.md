@@ -47,7 +47,7 @@ and environment variables override them.
 | Variable                   | Default | |
 | -------------------------- | ------- | - |
 | `DEVOPSY_ACME_EMAIL`       |         | Let's Encrypt email. Required the first time `traefik` runs. |
-| `DEVOPSY_ACME_PRODUCTION`  | `0`     | `1` for real certificates. Staging otherwise. |
+| `DEVOPSY_ACME_PRODUCTION`  | `1`     | `0` for Let's Encrypt staging. Only applies when Traefik's `.env` is first written. |
 | `DEVOPSY_CLOUDFLARE_DNS_API_TOKEN` | | Cloudflare token for Traefik's DNS-01 resolver. Writes Traefik's `dns.env` on every run. |
 | `DEVOPSY_CERTRESOLVER`     |         | Traefik's default resolver: `letsencrypt1` (HTTP-01), `acmedns` or `cloudflare` (DNS-01). Kept in sync in Traefik's `.env`. |
 | `DEVOPSY_ACMEDNS_DOMAIN`   |         | Runs acme-dns for Traefik's `acmedns` resolver on this subdomain, like `acme-vm1.example.com`. Prints the DNS records to create. |
@@ -70,14 +70,15 @@ exist, and never updates the clone. To upgrade Traefik:
 cd /srv/traefik && git pull && devopsy restart
 ```
 
-Setting `DEVOPSY_ACME_PRODUCTION=1` later has no effect on an existing
-`.env`. Edit it and run `devopsy restart`. The Cloudflare resolver's
+`DEVOPSY_ACME_PRODUCTION` only sets the initial Let's Encrypt environment.
+To switch later, run `devopsy letsencrypt production` (or `staging`) in
+`/srv/traefik`. The Cloudflare resolver's
 `dns.env`, the default resolver and acme-dns follow the settings on every
 run. With acme-dns on, each run ends with the DNS records to create; also
 `cd /srv/traefik && devopsy acmedns`. Open port 53, UDP and TCP, in your
 provider's firewall.
 
-See devopsy-traefik's README for how the two resolvers work, including DNS-01
+See devopsy-traefik's README for how the resolvers work, including DNS-01
 for domains outside Cloudflare.
 
 ## Deploying from CI
