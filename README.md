@@ -36,7 +36,7 @@ and environment variables override them.
 | `base`     | Installs curl, git, jq, openssh-client, unattended-upgrades and sudo, plus `DEVOPSY_APT_PACKAGES`. |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
 | `docker`   | Docker Engine and the Compose plugin from Docker's apt repository. Rotated logs and `live-restore`. |
-| `user`     | Creates the deploy user in the `docker` group and copies root's SSH authorized keys to it. |
+| `user`     | Creates the deploy user in the `docker` group, gives it `/srv` for projects, and copies root's SSH authorized keys to it. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
 | `cli`      | Installs or updates `devopsy` in `/usr/local/bin`, and this script as `devopsy-server` in `/usr/local/sbin`. |
 | `traefik`  | Clones devopsy-traefik, writes its `.env` and starts it. |
