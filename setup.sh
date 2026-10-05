@@ -10,11 +10,11 @@
 # reuses them. See README.md.
 set -euo pipefail
 
-STEPS=(base swap docker user ssh upgrades cli traefik)
+STEPS=(base swap docker user upgrades cli traefik)
 CONFIG_FILE=/etc/devopsy/server.env
 # Settings saved to $CONFIG_FILE.
 SETTINGS=(
-  DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SSH_KEYS_URL DEVOPSY_SWAP
+  DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SWAP
   DEVOPSY_AUTO_REBOOT_TIME DEVOPSY_ACME_EMAIL DEVOPSY_ACME_PRODUCTION
   DEVOPSY_TRAEFIK_DIR DEVOPSY_TRAEFIK_REPO DEVOPSY_CLI_VERSION
 )
@@ -44,7 +44,6 @@ load_settings() {
 
   DEVOPSY_USER=${DEVOPSY_USER:-devopsy}
   DEVOPSY_SUDO=${DEVOPSY_SUDO:-0}
-  DEVOPSY_SSH_KEYS_URL=${DEVOPSY_SSH_KEYS_URL:-}
   DEVOPSY_SWAP=${DEVOPSY_SWAP:-}
   DEVOPSY_AUTO_REBOOT_TIME=${DEVOPSY_AUTO_REBOOT_TIME:-}
   DEVOPSY_ACME_EMAIL=${DEVOPSY_ACME_EMAIL:-}
@@ -102,7 +101,7 @@ preflight() {
 step_base() {
   log "base packages"
   apt-get update -q >/dev/null
-  apt_install ca-certificates curl git openssh-server unattended-upgrades sudo
+  apt_install ca-certificates curl git unattended-upgrades sudo
 }
 
 step_swap() {
@@ -182,50 +181,22 @@ step_user() {
     rm -f /etc/sudoers.d/90-devopsy
   fi
 
-  # authorized_keys: what it has, plus root's, plus DEVOPSY_SSH_KEYS_URL.
+  # Root's authorized keys, so whoever manages the server can also log in as
+  # the deploy user. Keys already there are kept.
   home=$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)
   keys=$home/.ssh/authorized_keys
-  install -d -m 700 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$home/.ssh"
-  tmp=$(mktemp)
-  {
-    [ -f "$keys" ] && cat "$keys"
-    [ -f /root/.ssh/authorized_keys ] && cat /root/.ssh/authorized_keys
-    if [ -n "$DEVOPSY_SSH_KEYS_URL" ]; then
-      curl -fsSL "$DEVOPSY_SSH_KEYS_URL" || warn "user: could not fetch $DEVOPSY_SSH_KEYS_URL"
-      echo
-    fi
-  } | grep -E '^(ssh-|ecdsa-|sk-)' | awk '!seen[$0]++' >"$tmp" || true
-  if [ -s "$tmp" ]; then
+  if [ -s /root/.ssh/authorized_keys ]; then
+    install -d -m 700 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$home/.ssh"
+    tmp=$(mktemp)
+    {
+      if [ -f "$keys" ]; then cat "$keys"; fi
+      cat /root/.ssh/authorized_keys
+    } | awk 'NF && !seen[$0]++' >"$tmp"
     install -m 600 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$tmp" "$keys"
-    log "user: $(wc -l <"$keys") authorized key(s) for $DEVOPSY_USER"
+    rm -f "$tmp"
+    log "user: copied root's authorized keys to $DEVOPSY_USER"
   else
-    warn "user: no SSH keys for $DEVOPSY_USER. Set DEVOPSY_SSH_KEYS_URL (for example https://github.com/<you>.keys)."
-  fi
-  rm -f "$tmp"
-}
-
-step_ssh() {
-  local home
-  home=$(getent passwd "$DEVOPSY_USER" | cut -d: -f6 || true)
-  # Never lock ourselves out: only turn passwords off when a key exists.
-  if ! [ -s /root/.ssh/authorized_keys ] && ! [ -s "${home:-/nonexistent}/.ssh/authorized_keys" ]; then
-    warn "ssh: no authorized keys for root or $DEVOPSY_USER, leaving password login on"
-    return
-  fi
-  # sshd uses the first value it reads, and Debian includes sshd_config.d/*
-  # first, in order: 10- wins over cloud-init's 50-cloud-init.conf.
-  if write_file /etc/ssh/sshd_config.d/10-devopsy.conf <<'EOF'; then
-# Written by devopsy-server setup.sh.
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PermitRootLogin prohibit-password
-EOF
-    if ! /usr/sbin/sshd -t; then
-      rm -f /etc/ssh/sshd_config.d/10-devopsy.conf
-      die "ssh: invalid sshd configuration, removed 10-devopsy.conf and did not reload"
-    fi
-    systemctl reload ssh
-    log "ssh: password login disabled"
+    warn "user: root has no authorized keys, add some to $keys to log in as $DEVOPSY_USER"
   fi
 }
 

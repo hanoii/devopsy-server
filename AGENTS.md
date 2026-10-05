@@ -13,8 +13,8 @@ table and "Things to know".
   when the content changed, so a service restarts only then.
 - New settings are `DEVOPSY_*` variables with a default in `load_settings`.
   Add them to `SETTINGS` so they are saved, and to the README table.
-- Never risk locking the operator out. SSH changes must check for
-  authorized keys first, and validate before reloading.
+- Never change the SSH server configuration. Providers set it up, and a
+  mistake there locks the operator out.
 - No host firewall: the provider's firewall covers it. See README.md.
 - Debian 13 only. Use apt and systemd directly. No configuration management
   dependencies.
