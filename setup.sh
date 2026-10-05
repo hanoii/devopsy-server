@@ -427,8 +427,15 @@ step_traefik() {
   # /etc/devopsy/devopsy.env. One wildcard certificate when a DNS-01 resolver
   # is available; otherwise each URL gets its own HTTP-01 certificate.
   local wildcard=$dir/.devopsy/mnt/dynamic/public-wildcard.yaml resolver
+  # Server-wide settings for devopsy-cli: where Traefik lives (for `devopsy
+  # @target domains`) and the public domain.
+  {
+    echo "DEVOPSY_TRAEFIK_DIR=$dir"
+    if [ -n "$DEVOPSY_PUBLIC_DOMAIN" ]; then
+      echo "DEVOPSY_PUBLIC_DOMAIN=$DEVOPSY_PUBLIC_DOMAIN"
+    fi
+  } | write_file /etc/devopsy/devopsy.env 644 || true
   if [ -n "$DEVOPSY_PUBLIC_DOMAIN" ]; then
-    echo "DEVOPSY_PUBLIC_DOMAIN=$DEVOPSY_PUBLIC_DOMAIN" | write_file /etc/devopsy/devopsy.env 644 || true
     resolver=$DEVOPSY_PUBLIC_CERTRESOLVER
     if [ -z "$resolver" ]; then
       if [ -n "$DEVOPSY_ACMEDNS_DOMAIN" ]; then
