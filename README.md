@@ -47,6 +47,8 @@ and environment variables override them.
 | -------------------------- | ------- | - |
 | `DEVOPSY_ACME_EMAIL`       |         | Let's Encrypt email. Required the first time `traefik` runs. |
 | `DEVOPSY_ACME_PRODUCTION`  | `0`     | `1` for real certificates. Staging otherwise. |
+| `DEVOPSY_CLOUDFLARE_DNS_API_TOKEN` | | Cloudflare token for Traefik's DNS-01 resolver. Writes Traefik's `dns.env` on every run. |
+| `DEVOPSY_CERTRESOLVER`     |         | Traefik's default resolver: `letsencrypt1` (HTTP-01) or `cloudflare` (DNS-01). Kept in sync in Traefik's `.env`. |
 | `DEVOPSY_USER`             | `devopsy` | The deploy user. |
 | `DEVOPSY_SUDO`             | `0`     | `1` gives the deploy user passwordless sudo. |
 | `DEVOPSY_SWAP`             |         | Swap file size, like `2G`. |
@@ -65,7 +67,11 @@ cd /srv/traefik && git pull && devopsy restart
 ```
 
 Setting `DEVOPSY_ACME_PRODUCTION=1` later has no effect on an existing
-`.env`. Edit it and run `devopsy restart`.
+`.env`. Edit it and run `devopsy restart`. The Cloudflare resolver's
+`dns.env` and the default resolver follow the settings on every run.
+
+See devopsy-traefik's README for how the two resolvers work, including DNS-01
+for domains outside Cloudflare.
 
 ## Deploying from CI
 

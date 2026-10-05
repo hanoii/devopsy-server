@@ -19,7 +19,7 @@ SETTINGS=(
   DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SWAP
   DEVOPSY_AUTO_REBOOT_TIME DEVOPSY_ACME_EMAIL DEVOPSY_ACME_PRODUCTION
   DEVOPSY_TRAEFIK_DIR DEVOPSY_TRAEFIK_REPO DEVOPSY_CLI_VERSION
-  DEVOPSY_SERVER_VERSION
+  DEVOPSY_SERVER_VERSION DEVOPSY_CLOUDFLARE_DNS_API_TOKEN DEVOPSY_CERTRESOLVER
 )
 
 log() { printf '\033[0;36m[devopsy-server]\033[0m %s\n' "$*"; }
@@ -51,6 +51,8 @@ load_settings() {
   DEVOPSY_AUTO_REBOOT_TIME=${DEVOPSY_AUTO_REBOOT_TIME:-}
   DEVOPSY_ACME_EMAIL=${DEVOPSY_ACME_EMAIL:-}
   DEVOPSY_ACME_PRODUCTION=${DEVOPSY_ACME_PRODUCTION:-0}
+  DEVOPSY_CLOUDFLARE_DNS_API_TOKEN=${DEVOPSY_CLOUDFLARE_DNS_API_TOKEN:-}
+  DEVOPSY_CERTRESOLVER=${DEVOPSY_CERTRESOLVER:-}
   DEVOPSY_TRAEFIK_DIR=${DEVOPSY_TRAEFIK_DIR:-/srv/traefik}
   DEVOPSY_TRAEFIK_REPO=${DEVOPSY_TRAEFIK_REPO:-https://github.com/hanoii/devopsy-traefik.git}
   DEVOPSY_CLI_VERSION=${DEVOPSY_CLI_VERSION:-main}
@@ -318,6 +320,38 @@ step_traefik() {
     log "traefik: keeping the existing .devopsy/.env"
   fi
   install -d -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir/.devopsy/mnt/letsencrypt"
+
+  # Default resolver, kept in sync with the setting while it is set.
+  if [ -n "$DEVOPSY_CERTRESOLVER" ]; then
+    {
+      grep -v '^DEVOPSY_CERTRESOLVER=' "$dir/.devopsy/.env" || true
+      echo "DEVOPSY_CERTRESOLVER=$DEVOPSY_CERTRESOLVER"
+    } | write_file "$dir/.devopsy/.env" 600 || true
+    chown "$DEVOPSY_USER:$DEVOPSY_USER" "$dir/.devopsy/.env"
+  fi
+
+  # The Cloudflare DNS-01 resolver, managed while a token is set. Without
+  # one, an existing dns.env (written by hand) is left alone.
+  if [ -n "$DEVOPSY_CLOUDFLARE_DNS_API_TOKEN" ]; then
+    grep -q 'dns\.env' "$dir/.devopsy/compose.yaml" \
+      || warn "traefik: this clone predates dns.env support, update it: cd $dir && git pull"
+    [ -n "$DEVOPSY_ACME_EMAIL" ] || die "traefik: set DEVOPSY_ACME_EMAIL for Let's Encrypt"
+    {
+      echo "# Written by devopsy-server setup.sh from DEVOPSY_CLOUDFLARE_DNS_API_TOKEN."
+      echo "CF_DNS_API_TOKEN=$DEVOPSY_CLOUDFLARE_DNS_API_TOKEN"
+      echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE=true"
+      echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_EMAIL=$DEVOPSY_ACME_EMAIL"
+      if [ "$DEVOPSY_ACME_PRODUCTION" = 1 ]; then
+        echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_CASERVER=https://acme-v02.api.letsencrypt.org/directory"
+      else
+        echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_CASERVER=https://acme-staging-v02.api.letsencrypt.org/directory"
+      fi
+      echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_STORAGE=/letsencrypt/acme-cloudflare.json"
+      echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_DNSCHALLENGE_PROVIDER=cloudflare"
+      echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_DNSCHALLENGE_RESOLVERS=1.1.1.1:53,1.0.0.1:53"
+    } | write_file "$dir/.devopsy/dns.env" 600 || true
+    chown "$DEVOPSY_USER:$DEVOPSY_USER" "$dir/.devopsy/dns.env"
+  fi
 
   log "traefik: starting"
   (cd "$dir" && as_user devopsy up -d --wait --quiet-pull) >/dev/null
