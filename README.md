@@ -117,6 +117,11 @@ GitLab cannot mask a multi-line key, so never print the variable in a job.
 
 ## Things to know
 
+- **A block volume for `/srv`.** Projects and their data live in `/srv`.
+  Providers mount volumes elsewhere (DigitalOcean: `/mnt/<volume>`); mount it
+  on `/srv` before running this script, and add `RequiresMountsFor=/srv` to
+  a `docker.service.d` drop-in so containers never start before it.
+
 - **The deploy user is effectively root.** Membership in the `docker` group
   allows root access through Docker. Treat its keys accordingly.
 - **No host firewall.** Use your provider's firewall and allow only SSH, 80
