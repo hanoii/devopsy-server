@@ -471,25 +471,26 @@ step_traefik() {
   # ranges. Unset leaves whatever is there.
   local unit=/etc/systemd/system/devopsy-cloudflare-ips
   if [ "$DEVOPSY_CLOUDFLARE_PROXY" = 1 ]; then
-    if [ -x "$dir/.devopsy/commands/cloudflare-proxy" ]; then
-      if [ ! -f "$dir/.devopsy/cloudflare-proxy.env" ]; then
-        log "traefik: turning on real client IPs behind Cloudflare"
-        (cd "$dir" && as_user devopsy cloudflare-proxy on) >/dev/null
+    if [ -x "$dir/.devopsy/commands/proxies" ]; then
+      # Also migrates the first, Cloudflare-only version (cloudflare-proxy.env).
+      if ! grep -q '^cloudflare ' "$dir/.devopsy/proxies.conf" 2>/dev/null || [ -f "$dir/.devopsy/cloudflare-proxy.env" ]; then
+        log "traefik: trusting Cloudflare's proxy for real client IPs"
+        (cd "$dir" && as_user devopsy proxies add cloudflare) >/dev/null
       fi
       local changed=0
       write_file "$unit.service" <<EOF && changed=1
 [Unit]
-Description=Refresh Cloudflare's IP ranges for devopsy-traefik
+Description=Refresh trusted proxies' IP ranges for devopsy-traefik
 
 [Service]
 Type=oneshot
 User=$DEVOPSY_USER
 WorkingDirectory=$dir
-ExecStart=/usr/local/bin/devopsy cloudflare-proxy refresh
+ExecStart=/usr/local/bin/devopsy proxies refresh
 EOF
       write_file "$unit.timer" <<'EOF' && changed=1
 [Unit]
-Description=Weekly refresh of Cloudflare's IP ranges for devopsy-traefik
+Description=Weekly refresh of trusted proxies' IP ranges for devopsy-traefik
 
 [Timer]
 OnCalendar=weekly
@@ -504,12 +505,12 @@ EOF
       fi
       systemctl enable --now devopsy-cloudflare-ips.timer >/dev/null 2>&1
     else
-      warn "traefik: this clone predates cloudflare-proxy, update it: cd $dir && git pull"
+      warn "traefik: this clone predates the proxies command, update it: cd $dir && git pull"
     fi
   elif [ "$DEVOPSY_CLOUDFLARE_PROXY" = 0 ]; then
-    if [ -f "$dir/.devopsy/cloudflare-proxy.env" ]; then
-      log "traefik: turning off real client IPs behind Cloudflare"
-      (cd "$dir" && as_user devopsy cloudflare-proxy off) >/dev/null
+    if grep -q '^cloudflare ' "$dir/.devopsy/proxies.conf" 2>/dev/null || [ -f "$dir/.devopsy/cloudflare-proxy.env" ]; then
+      log "traefik: no longer trusting Cloudflare's proxy"
+      (cd "$dir" && as_user devopsy proxies remove cloudflare) >/dev/null
     fi
     if [ -f "$unit.timer" ]; then
       systemctl disable --now devopsy-cloudflare-ips.timer >/dev/null 2>&1 || true
