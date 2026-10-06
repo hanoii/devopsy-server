@@ -54,6 +54,7 @@ and environment variables override them.
 | `DEVOPSY_ACMEDNS_IP`       | detected | Public IPv4 acme-dns listens on. Set it when the server is behind NAT. |
 | `DEVOPSY_PUBLIC_DOMAIN`    |         | Public URLs: every project gets `<project>.<domain>`, like `vm1.example.com`. Written to `/etc/devopsy/devopsy.env` for devopsy-cli. Needs `*.<domain>` pointing at the server. |
 | `DEVOPSY_PUBLIC_CERTRESOLVER` | auto | `acmedns`, `cloudflare` or `none`. A DNS-01 resolver gets one wildcard certificate; `none` leaves each URL its own. Auto: acmedns, else cloudflare, else none. |
+| `DEVOPSY_CLOUDFLARE_PROXY` |       | `1`: real client IPs for sites behind Cloudflare's proxy (devopsy-traefik's `cloudflare-proxy`), with a weekly systemd timer refreshing Cloudflare's ranges. `0`: off. Unset: unchanged. |
 | `DEVOPSY_USER`             | `devopsy` | The deploy user. |
 | `DEVOPSY_SUDO`             | `0`     | `1` gives the deploy user passwordless sudo. |
 | `DEVOPSY_APT_PACKAGES`     |         | Extra Debian packages to install, space separated, like `htop ncdu`. Removing one from the list does not uninstall it. |
