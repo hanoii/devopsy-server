@@ -21,7 +21,7 @@ SETTINGS=(
   DEVOPSY_TRAEFIK_DIR DEVOPSY_TRAEFIK_REPO DEVOPSY_CLI_VERSION
   DEVOPSY_SERVER_VERSION DEVOPSY_CLOUDFLARE_DNS_API_TOKEN DEVOPSY_CERTRESOLVER
   DEVOPSY_ACMEDNS_DOMAIN DEVOPSY_ACMEDNS_IP DEVOPSY_APT_PACKAGES
-  DEVOPSY_PUBLIC_DOMAIN DEVOPSY_PUBLIC_CERTRESOLVER
+  DEVOPSY_PUBLIC_DOMAIN DEVOPSY_PUBLIC_CERTRESOLVER DEVOPSY_CLOUDFLARE_PROXY
 )
 
 log() { printf '\033[0;36m[devopsy-server]\033[0m %s\n' "$*"; }
@@ -59,6 +59,7 @@ load_settings() {
   DEVOPSY_ACMEDNS_IP=${DEVOPSY_ACMEDNS_IP:-}
   DEVOPSY_PUBLIC_DOMAIN=${DEVOPSY_PUBLIC_DOMAIN:-}
   DEVOPSY_PUBLIC_CERTRESOLVER=${DEVOPSY_PUBLIC_CERTRESOLVER:-}
+  DEVOPSY_CLOUDFLARE_PROXY=${DEVOPSY_CLOUDFLARE_PROXY:-}
   DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
   DEVOPSY_TRAEFIK_DIR=${DEVOPSY_TRAEFIK_DIR:-/srv/traefik}
   DEVOPSY_TRAEFIK_REPO=${DEVOPSY_TRAEFIK_REPO:-https://github.com/hanoii/devopsy-traefik.git}
@@ -77,6 +78,10 @@ validate_settings() {
   if [ -n "$DEVOPSY_PUBLIC_DOMAIN" ] && ! [[ $DEVOPSY_PUBLIC_DOMAIN =~ $domain_re ]]; then
     die "DEVOPSY_PUBLIC_DOMAIN '$DEVOPSY_PUBLIC_DOMAIN' is not a domain name"
   fi
+  case $DEVOPSY_CLOUDFLARE_PROXY in
+    '' | 0 | 1) ;;
+    *) die "DEVOPSY_CLOUDFLARE_PROXY must be 1 or 0" ;;
+  esac
   case $DEVOPSY_PUBLIC_CERTRESOLVER in
     '' | acmedns | cloudflare | none) ;;
     *) die "DEVOPSY_PUBLIC_CERTRESOLVER must be acmedns, cloudflare or none" ;;
@@ -461,6 +466,57 @@ step_traefik() {
   log "traefik: starting"
   (cd "$dir" && as_user devopsy up -d --wait --quiet-pull) >/dev/null
   log "traefik: running"
+
+  # Real client IPs behind Cloudflare's proxy, and a weekly refresh of its
+  # ranges. Unset leaves whatever is there.
+  local unit=/etc/systemd/system/devopsy-cloudflare-ips
+  if [ "$DEVOPSY_CLOUDFLARE_PROXY" = 1 ]; then
+    if [ -x "$dir/.devopsy/commands/cloudflare-proxy" ]; then
+      if [ ! -f "$dir/.devopsy/cloudflare-proxy.env" ]; then
+        log "traefik: turning on real client IPs behind Cloudflare"
+        (cd "$dir" && as_user devopsy cloudflare-proxy on) >/dev/null
+      fi
+      local changed=0
+      write_file "$unit.service" <<EOF && changed=1
+[Unit]
+Description=Refresh Cloudflare's IP ranges for devopsy-traefik
+
+[Service]
+Type=oneshot
+User=$DEVOPSY_USER
+WorkingDirectory=$dir
+ExecStart=/usr/local/bin/devopsy cloudflare-proxy refresh
+EOF
+      write_file "$unit.timer" <<'EOF' && changed=1
+[Unit]
+Description=Weekly refresh of Cloudflare's IP ranges for devopsy-traefik
+
+[Timer]
+OnCalendar=weekly
+RandomizedDelaySec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+      if [ "$changed" = 1 ]; then
+        systemctl daemon-reload
+      fi
+      systemctl enable --now devopsy-cloudflare-ips.timer >/dev/null 2>&1
+    else
+      warn "traefik: this clone predates cloudflare-proxy, update it: cd $dir && git pull"
+    fi
+  elif [ "$DEVOPSY_CLOUDFLARE_PROXY" = 0 ]; then
+    if [ -f "$dir/.devopsy/cloudflare-proxy.env" ]; then
+      log "traefik: turning off real client IPs behind Cloudflare"
+      (cd "$dir" && as_user devopsy cloudflare-proxy off) >/dev/null
+    fi
+    if [ -f "$unit.timer" ]; then
+      systemctl disable --now devopsy-cloudflare-ips.timer >/dev/null 2>&1 || true
+      rm -f "$unit.timer" "$unit.service"
+      systemctl daemon-reload
+    fi
+  fi
 
   if [ -n "$DEVOPSY_PUBLIC_DOMAIN" ]; then
     echo
