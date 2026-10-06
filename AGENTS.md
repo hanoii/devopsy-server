@@ -47,6 +47,16 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   ask for admin rights (its network helper): go through `ssh
   <user>@<machine>@orb` instead, and test public DNS and certificates on a
   real server.
+- Provider block volumes: DigitalOcean mounts an attached volume on
+  `/mnt/<volume>` with its own systemd mount unit. devopsy keeps projects and
+  data in `/srv`, so mount the volume there (`srv.mount`, after removing the
+  provider's unit) before running setup, and make Docker wait for it
+  (`RequiresMountsFor=/srv` in a `docker.service.d` drop-in): otherwise
+  containers starting before the mount write their bind mounts to the root
+  disk, hidden under the volume. Done by hand on builder1; not automated
+  (see ROADMAP.md).
+- The first run prints the CI private key (`ci-key`). Run setup where its
+  output is not logged, or replace the key afterwards.
 
 ## Checks
 
