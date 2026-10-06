@@ -43,6 +43,10 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   127.0.0.53:53 (a few lines of python) before starting acme-dns. Right after
   editing a file, OrbStack's file sharing can serve a stale copy to a machine
   or a `docker run` mount: rerun before trusting a surprising result.
+  Reaching a machine's IP or `<machine>.orb.local` from macOS makes OrbStack
+  ask for admin rights (its network helper): go through `ssh
+  <user>@<machine>@orb` instead, and test public DNS and certificates on a
+  real server.
 
 ## Checks
 
