@@ -258,7 +258,7 @@ step_cli() {
   # ran in a clone that releases replace.
   if [ -f /etc/devopsy/devopsy.env ]; then
     rm -f /etc/devopsy/devopsy.env
-    log "cli: removed /etc/devopsy/devopsy.env (set DEVOPSY_PUBLIC_DOMAIN on each target)"
+    log "cli: removed /etc/devopsy/devopsy.env (releases now get the public domain from the server's Traefik)"
   fi
   local unit=/etc/systemd/system/devopsy-cloudflare-ips
   if [ -f "$unit.timer" ]; then

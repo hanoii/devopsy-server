@@ -66,8 +66,9 @@ its README.
 They had a `traefik` step that cloned devopsy-traefik into `/srv/traefik`,
 wrote `/etc/devopsy/devopsy.env` and a weekly Cloudflare range timer. Move
 the clone into the release layout as devopsy-traefik's README describes
-("From a clone"), set `DEVOPSY_PUBLIC_DOMAIN` on each project target, then
-run `devopsy-server`: the `cli` step removes `/etc/devopsy/devopsy.env` and
+("From a clone", with `DEVOPSY_WILDCARD_DOMAIN` for the public domain),
+run `devopsy-server`, then release each project again so it gets the public
+domain from Traefik. Its `cli` step removes `/etc/devopsy/devopsy.env` and
 the timer. Saved settings it no longer knows are dropped from
 `/etc/devopsy/server.env`.
 
