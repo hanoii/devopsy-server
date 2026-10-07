@@ -193,7 +193,7 @@ step_user() {
     usermod -aG docker "$DEVOPSY_USER"
   fi
 
-  # Projects live in /srv: `devopsy @target release` creates their
+  # Projects live in /srv: `devopsy @target --release` creates their
   # directories as this user. Not recursive: only /srv itself.
   chown "$DEVOPSY_USER:$DEVOPSY_USER" /srv
 
