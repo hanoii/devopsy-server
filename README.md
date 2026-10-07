@@ -57,7 +57,7 @@ and environment variables override them.
 | `DEVOPSY_SERVER_VERSION`   | `main`  | devopsy-server branch or tag installed as `devopsy-server`. |
 | `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13. Not saved. |
 
-Traefik's settings (ACME email, resolvers, acme-dns, the public domain,
+Traefik's settings (ACME email, resolvers, acme-dns, the wildcard domain,
 Cloudflare) are devopsy-traefik's, in its `shared/.env` on the server; see
 its README.
 
@@ -66,7 +66,7 @@ its README.
 They had a `traefik` step that cloned devopsy-traefik into `/srv/traefik`,
 wrote `/etc/devopsy/devopsy.env` and a weekly Cloudflare range timer. Move
 the clone into the release layout as devopsy-traefik's README describes
-("From a clone", with `DEVOPSY_WILDCARD_DOMAIN` for the public domain),
+("From a clone", with `DEVOPSY_WILDCARD_DOMAIN` for the wildcard domain),
 run `devopsy-server`, then release each project again so it gets the public
 domain from Traefik. Its `cli` step removes `/etc/devopsy/devopsy.env` and
 the timer. Saved settings it no longer knows are dropped from

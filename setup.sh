@@ -254,11 +254,11 @@ step_cli() {
   rm -f "$tmp"
 
   # Left by versions that set up Traefik themselves: devopsy no longer reads
-  # devopsy.env (the public domain is each target's), and the range refresh
+  # devopsy.env (releases get the wildcard domain from Traefik), and the range refresh
   # ran in a clone that releases replace.
   if [ -f /etc/devopsy/devopsy.env ]; then
     rm -f /etc/devopsy/devopsy.env
-    log "cli: removed /etc/devopsy/devopsy.env (releases now get the public domain from the server's Traefik)"
+    log "cli: removed /etc/devopsy/devopsy.env (releases now get the wildcard domain from the server's Traefik)"
   fi
   local unit=/etc/systemd/system/devopsy-cloudflare-ips
   if [ -f "$unit.timer" ]; then
