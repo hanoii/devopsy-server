@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Prepares a fresh Debian 13 server for devopsy projects. Run as root:
 #
-#   curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh \
-#     | DEVOPSY_ACME_EMAIL=you@example.com bash
+#   curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash
 #
 # Every step is idempotent: rerun the whole script, or only some steps, at any
 # time. Pass step names as arguments (`bash -s -- docker cli` when piped).
@@ -10,18 +9,17 @@
 # are `devopsy-server [step...]`.
 # Settings come from the environment, and are saved to $CONFIG_FILE so a rerun
 # reuses them. See README.md.
+#
+# It prepares the host only: Traefik (devopsy-traefik) and projects are
+# released onto it with devopsy, like any project.
 set -euo pipefail
 
-STEPS=(base swap docker user upgrades cli traefik ci-key)
+STEPS=(base swap docker user upgrades cli ci-key)
 CONFIG_FILE=/etc/devopsy/server.env
 # Settings saved to $CONFIG_FILE.
 SETTINGS=(
-  DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SWAP
-  DEVOPSY_AUTO_REBOOT_TIME DEVOPSY_ACME_EMAIL DEVOPSY_ACME_PRODUCTION
-  DEVOPSY_TRAEFIK_DIR DEVOPSY_TRAEFIK_REPO DEVOPSY_CLI_VERSION
-  DEVOPSY_SERVER_VERSION DEVOPSY_CLOUDFLARE_DNS_API_TOKEN DEVOPSY_CERTRESOLVER
-  DEVOPSY_ACMEDNS_DOMAIN DEVOPSY_ACMEDNS_IP DEVOPSY_APT_PACKAGES
-  DEVOPSY_PUBLIC_DOMAIN DEVOPSY_PUBLIC_CERTRESOLVER DEVOPSY_CLOUDFLARE_PROXY
+  DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SWAP DEVOPSY_AUTO_REBOOT_TIME
+  DEVOPSY_CLI_VERSION DEVOPSY_SERVER_VERSION DEVOPSY_APT_PACKAGES
 )
 
 log() { printf '\033[0;36m[devopsy-server]\033[0m %s\n' "$*"; }
@@ -51,18 +49,7 @@ load_settings() {
   DEVOPSY_SUDO=${DEVOPSY_SUDO:-0}
   DEVOPSY_SWAP=${DEVOPSY_SWAP:-}
   DEVOPSY_AUTO_REBOOT_TIME=${DEVOPSY_AUTO_REBOOT_TIME:-}
-  DEVOPSY_ACME_EMAIL=${DEVOPSY_ACME_EMAIL:-}
-  DEVOPSY_ACME_PRODUCTION=${DEVOPSY_ACME_PRODUCTION:-1}
-  DEVOPSY_CLOUDFLARE_DNS_API_TOKEN=${DEVOPSY_CLOUDFLARE_DNS_API_TOKEN:-}
-  DEVOPSY_CERTRESOLVER=${DEVOPSY_CERTRESOLVER:-}
-  DEVOPSY_ACMEDNS_DOMAIN=${DEVOPSY_ACMEDNS_DOMAIN:-}
-  DEVOPSY_ACMEDNS_IP=${DEVOPSY_ACMEDNS_IP:-}
-  DEVOPSY_PUBLIC_DOMAIN=${DEVOPSY_PUBLIC_DOMAIN:-}
-  DEVOPSY_PUBLIC_CERTRESOLVER=${DEVOPSY_PUBLIC_CERTRESOLVER:-}
-  DEVOPSY_CLOUDFLARE_PROXY=${DEVOPSY_CLOUDFLARE_PROXY:-}
   DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
-  DEVOPSY_TRAEFIK_DIR=${DEVOPSY_TRAEFIK_DIR:-/srv/traefik}
-  DEVOPSY_TRAEFIK_REPO=${DEVOPSY_TRAEFIK_REPO:-https://github.com/hanoii/devopsy-traefik.git}
   DEVOPSY_CLI_VERSION=${DEVOPSY_CLI_VERSION:-latest}
   DEVOPSY_SERVER_VERSION=${DEVOPSY_SERVER_VERSION:-main}
 }
@@ -74,18 +61,6 @@ validate_settings() {
   for pkg in $DEVOPSY_APT_PACKAGES; do
     [[ $pkg =~ $name_re ]] || die "'$pkg' in DEVOPSY_APT_PACKAGES is not a package name"
   done
-  local domain_re='^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$'
-  if [ -n "$DEVOPSY_PUBLIC_DOMAIN" ] && ! [[ $DEVOPSY_PUBLIC_DOMAIN =~ $domain_re ]]; then
-    die "DEVOPSY_PUBLIC_DOMAIN '$DEVOPSY_PUBLIC_DOMAIN' is not a domain name"
-  fi
-  case $DEVOPSY_CLOUDFLARE_PROXY in
-    '' | 0 | 1) ;;
-    *) die "DEVOPSY_CLOUDFLARE_PROXY must be 1 or 0" ;;
-  esac
-  case $DEVOPSY_PUBLIC_CERTRESOLVER in
-    '' | acmedns | cloudflare | none) ;;
-    *) die "DEVOPSY_PUBLIC_CERTRESOLVER must be acmedns, cloudflare or none" ;;
-  esac
 }
 
 save_settings() {
@@ -113,22 +88,6 @@ write_file() {
   install -D -m "$mode" "$tmp" "$file"
   rm -f "$tmp"
   log "wrote $file"
-}
-
-# Sets KEY=value in an env file: replaces the KEY line in place, or appends
-# it. Same return convention as write_file.
-env_set() {
-  local file=$1 key=$2 value=$3
-  awk -v key="$key" -v line="$key=$value" '
-    index($0, key "=") == 1 { if (!done) print line; done = 1; next }
-    { print }
-    END { if (!done) print line }
-  ' "$file" | write_file "$file" 600
-}
-
-# The IPv4 of the default route: the public IP on most cloud servers.
-detect_ip() {
-  ip -4 route get 1.1.1.1 | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }'
 }
 
 as_user() {
@@ -293,6 +252,21 @@ step_cli() {
   head -n 1 "$tmp" | grep -q '^#!/usr/bin/env bash' || die "cli: could not download devopsy-server ($DEVOPSY_SERVER_VERSION)"
   install -m 755 "$tmp" /usr/local/sbin/devopsy-server
   rm -f "$tmp"
+
+  # Left by versions that set up Traefik themselves: devopsy no longer reads
+  # devopsy.env (the public domain is each target's), and the range refresh
+  # ran in a clone that releases replace.
+  if [ -f /etc/devopsy/devopsy.env ]; then
+    rm -f /etc/devopsy/devopsy.env
+    log "cli: removed /etc/devopsy/devopsy.env (set DEVOPSY_PUBLIC_DOMAIN on each target)"
+  fi
+  local unit=/etc/systemd/system/devopsy-cloudflare-ips
+  if [ -f "$unit.timer" ]; then
+    systemctl disable --now devopsy-cloudflare-ips.timer >/dev/null 2>&1 || true
+    rm -f "$unit.timer" "$unit.service"
+    systemctl daemon-reload
+    log "cli: removed the devopsy-cloudflare-ips timer (see devopsy-traefik's README to schedule refreshes)"
+  fi
 }
 
 # An SSH key for CI to log in as the deploy user and run deployments. The
@@ -344,197 +318,6 @@ EOF
     if [ -f "$host_key" ]; then ssh-keygen -lf "$host_key"; fi
   done
   echo
-}
-
-step_traefik() {
-  local dir=$DEVOPSY_TRAEFIK_DIR uid gid docker_gid acmedns_ip ca
-  command -v devopsy >/dev/null || die "traefik: devopsy is not installed, run the cli step"
-  id "$DEVOPSY_USER" >/dev/null 2>&1 || die "traefik: $DEVOPSY_USER does not exist, run the user step"
-
-  if [ ! -d "$dir/.git" ]; then
-    log "traefik: cloning into $dir"
-    install -d -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir"
-    as_user git clone -q "$DEVOPSY_TRAEFIK_REPO" "$dir"
-  else
-    log "traefik: $dir exists, not updating it (git pull and devopsy restart to upgrade)"
-  fi
-
-  if [ ! -f "$dir/.devopsy/.env" ]; then
-    [ -n "$DEVOPSY_ACME_EMAIL" ] || die "traefik: set DEVOPSY_ACME_EMAIL for Let's Encrypt"
-    uid=$(id -u "$DEVOPSY_USER")
-    gid=$(id -g "$DEVOPSY_USER")
-    docker_gid=$(stat -c %g /var/run/docker.sock)
-    {
-      echo "TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT1_ACME_EMAIL=$DEVOPSY_ACME_EMAIL"
-      # Only for a new .env. Afterwards `devopsy letsencrypt` switches it.
-      if [ "$DEVOPSY_ACME_PRODUCTION" = 1 ]; then
-        echo "TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT1_ACME_CASERVER=https://acme-v02.api.letsencrypt.org/directory"
-      else
-        echo "TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT1_ACME_CASERVER=https://acme-staging-v02.api.letsencrypt.org/directory"
-      fi
-      echo "DEVOPSY_UID=$uid"
-      echo "DEVOPSY_GID=$gid"
-      echo "DEVOPSY_DOCKER_GID=$docker_gid"
-    } | write_file "$dir/.devopsy/.env" 600
-    chown "$DEVOPSY_USER:$DEVOPSY_USER" "$dir/.devopsy/.env"
-  else
-    log "traefik: keeping the existing .devopsy/.env"
-  fi
-  # Owned by the deploy user, which Traefik and acme-dns run as. Docker would
-  # create missing ones as root.
-  install -d -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir/.devopsy/mnt/letsencrypt" "$dir/.devopsy/mnt/acmedns"
-
-  # Default resolver, kept in sync with the setting while it is set.
-  if [ -n "$DEVOPSY_CERTRESOLVER" ]; then
-    env_set "$dir/.devopsy/.env" DEVOPSY_CERTRESOLVER "$DEVOPSY_CERTRESOLVER" || true
-  fi
-
-  # The acme-dns server for the acmedns resolver, while a domain is set.
-  if [ -n "$DEVOPSY_ACMEDNS_DOMAIN" ]; then
-    [ -x "$dir/.devopsy/commands/acmedns" ] \
-      || warn "traefik: this clone predates acme-dns support, update it: cd $dir && git pull"
-    env_set "$dir/.devopsy/.env" COMPOSE_PROFILES acmedns || true
-    env_set "$dir/.devopsy/.env" DEVOPSY_ACMEDNS_DOMAIN "$DEVOPSY_ACMEDNS_DOMAIN" || true
-    # acme-dns listens on this IP only: 0.0.0.0:53 clashes with
-    # systemd-resolved's 127.0.0.53:53. Detected unless set.
-    acmedns_ip=$DEVOPSY_ACMEDNS_IP
-    if [ -z "$acmedns_ip" ]; then
-      acmedns_ip=$(detect_ip)
-    fi
-    [ -n "$acmedns_ip" ] || die "traefik: could not detect the public IP, set DEVOPSY_ACMEDNS_IP"
-    env_set "$dir/.devopsy/.env" DEVOPSY_ACMEDNS_IP "$acmedns_ip" || true
-  fi
-  chown "$DEVOPSY_USER:$DEVOPSY_USER" "$dir/.devopsy/.env"
-
-  # The Cloudflare DNS-01 resolver, managed while a token is set. Without
-  # one, an existing dns.env (written by hand) is left alone.
-  if [ -n "$DEVOPSY_CLOUDFLARE_DNS_API_TOKEN" ]; then
-    ca=$(sed -n 's/^TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT1_ACME_CASERVER=//p' "$dir/.devopsy/.env" | tail -n 1)
-    ca=${ca:-https://acme-staging-v02.api.letsencrypt.org/directory}
-    grep -q 'dns\.env' "$dir/.devopsy/compose.yaml" \
-      || warn "traefik: this clone predates dns.env support, update it: cd $dir && git pull"
-    [ -n "$DEVOPSY_ACME_EMAIL" ] || die "traefik: set DEVOPSY_ACME_EMAIL for Let's Encrypt"
-    {
-      echo "# Written by devopsy-server setup.sh from DEVOPSY_CLOUDFLARE_DNS_API_TOKEN."
-      echo "CF_DNS_API_TOKEN=$DEVOPSY_CLOUDFLARE_DNS_API_TOKEN"
-      echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE=true"
-      echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_EMAIL=$DEVOPSY_ACME_EMAIL"
-      # Same CA as the other resolvers, as `devopsy letsencrypt` last set it.
-      echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_CASERVER=$ca"
-      echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_STORAGE=/letsencrypt/acme-cloudflare.json"
-      echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_DNSCHALLENGE_PROVIDER=cloudflare"
-      echo "TRAEFIK_CERTIFICATESRESOLVERS_CLOUDFLARE_ACME_DNSCHALLENGE_RESOLVERS=1.1.1.1:53,1.0.0.1:53"
-    } | write_file "$dir/.devopsy/dns.env" 600 || true
-    chown "$DEVOPSY_USER:$DEVOPSY_USER" "$dir/.devopsy/dns.env"
-  fi
-
-  # Public URLs, <project>.<domain>: devopsy-cli reads the domain from
-  # /etc/devopsy/devopsy.env. One wildcard certificate when a DNS-01 resolver
-  # is available; otherwise each URL gets its own HTTP-01 certificate.
-  local wildcard=$dir/.devopsy/mnt/dynamic/public-wildcard.yaml resolver
-  # Server-wide settings for devopsy-cli: where Traefik lives (for `devopsy
-  # @target domains`) and the public domain.
-  {
-    echo "DEVOPSY_TRAEFIK_DIR=$dir"
-    if [ -n "$DEVOPSY_PUBLIC_DOMAIN" ]; then
-      echo "DEVOPSY_PUBLIC_DOMAIN=$DEVOPSY_PUBLIC_DOMAIN"
-    fi
-  } | write_file /etc/devopsy/devopsy.env 644 || true
-  if [ -n "$DEVOPSY_PUBLIC_DOMAIN" ]; then
-    resolver=$DEVOPSY_PUBLIC_CERTRESOLVER
-    if [ -z "$resolver" ]; then
-      if [ -n "$DEVOPSY_ACMEDNS_DOMAIN" ]; then
-        resolver=acmedns
-      elif [ -n "$DEVOPSY_CLOUDFLARE_DNS_API_TOKEN" ]; then
-        resolver=cloudflare
-      else
-        resolver=none
-      fi
-    fi
-    if [ "$resolver" = none ]; then
-      rm -f "$wildcard"
-    elif [ -f "$dir/.devopsy/dynamic.example/public-wildcard.yaml" ]; then
-      install -d -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir/.devopsy/mnt/dynamic"
-      sed -e "s/vm1\.example\.com/$DEVOPSY_PUBLIC_DOMAIN/g" -e "s/certResolver: acmedns/certResolver: $resolver/" \
-        "$dir/.devopsy/dynamic.example/public-wildcard.yaml" | write_file "$wildcard" 644 || true
-      chown "$DEVOPSY_USER:$DEVOPSY_USER" "$wildcard"
-    else
-      warn "traefik: this clone predates public URLs, update it: cd $dir && git pull"
-    fi
-  fi
-
-  log "traefik: starting"
-  (cd "$dir" && as_user devopsy up -d --wait --quiet-pull) >/dev/null
-  log "traefik: running"
-
-  # Real client IPs behind Cloudflare's proxy, and a weekly refresh of its
-  # ranges. Unset leaves whatever is there.
-  local unit=/etc/systemd/system/devopsy-cloudflare-ips
-  if [ "$DEVOPSY_CLOUDFLARE_PROXY" = 1 ]; then
-    if [ -x "$dir/.devopsy/commands/proxies" ]; then
-      # Also migrates the first, Cloudflare-only version (cloudflare-proxy.env).
-      if ! grep -q '^cloudflare ' "$dir/.devopsy/proxies.conf" 2>/dev/null || [ -f "$dir/.devopsy/cloudflare-proxy.env" ]; then
-        log "traefik: trusting Cloudflare's proxy for real client IPs"
-        (cd "$dir" && as_user devopsy proxies add cloudflare) >/dev/null
-      fi
-      local changed=0
-      write_file "$unit.service" <<EOF && changed=1
-[Unit]
-Description=Refresh trusted proxies' IP ranges for devopsy-traefik
-
-[Service]
-Type=oneshot
-User=$DEVOPSY_USER
-WorkingDirectory=$dir
-ExecStart=/usr/local/bin/devopsy proxies refresh
-EOF
-      write_file "$unit.timer" <<'EOF' && changed=1
-[Unit]
-Description=Weekly refresh of trusted proxies' IP ranges for devopsy-traefik
-
-[Timer]
-OnCalendar=weekly
-RandomizedDelaySec=6h
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-      if [ "$changed" = 1 ]; then
-        systemctl daemon-reload
-      fi
-      systemctl enable --now devopsy-cloudflare-ips.timer >/dev/null 2>&1
-    else
-      warn "traefik: this clone predates the proxies command, update it: cd $dir && git pull"
-    fi
-  elif [ "$DEVOPSY_CLOUDFLARE_PROXY" = 0 ]; then
-    if grep -q '^cloudflare ' "$dir/.devopsy/proxies.conf" 2>/dev/null || [ -f "$dir/.devopsy/cloudflare-proxy.env" ]; then
-      log "traefik: no longer trusting Cloudflare's proxy"
-      (cd "$dir" && as_user devopsy proxies remove cloudflare) >/dev/null
-    fi
-    if [ -f "$unit.timer" ]; then
-      systemctl disable --now devopsy-cloudflare-ips.timer >/dev/null 2>&1 || true
-      rm -f "$unit.timer" "$unit.service"
-      systemctl daemon-reload
-    fi
-  fi
-
-  if [ -n "$DEVOPSY_PUBLIC_DOMAIN" ]; then
-    echo
-    echo "Public URLs: <project>.$DEVOPSY_PUBLIC_DOMAIN. Once, in the zone that contains it:"
-    echo
-    printf '  *.%s.  A   %s\n' "$DEVOPSY_PUBLIC_DOMAIN" "${DEVOPSY_ACMEDNS_IP:-$(detect_ip)}"
-    if [ "$resolver" = acmedns ]; then
-      echo
-      echo "The wildcard certificate also needs the _acme-challenge CNAME listed below."
-    fi
-  fi
-
-  if [ -n "$DEVOPSY_ACMEDNS_DOMAIN" ] && [ -x "$dir/.devopsy/commands/acmedns" ]; then
-    echo
-    (cd "$dir" && as_user devopsy acmedns)
-    echo
-  fi
 }
 
 # When run as the installed devopsy-server, replace it with the latest version

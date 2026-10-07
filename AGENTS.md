@@ -20,8 +20,11 @@ table and "Things to know".
   dependencies.
 - Only print secrets when they are created or explicitly asked for, like
   the `ci-key` step does. A plain rerun must not print them.
-- Keep it a bootstrap. Per-project deployment belongs in projects'
-  `.devopsy/`, and Traefik's setup in devopsy-traefik.
+- Keep it a bootstrap: the host only. Per-project deployment belongs in
+  projects' `.devopsy/`, and Traefik is released like any project
+  (devopsy-traefik). Nothing here knows about Traefik or writes settings
+  devopsy-cli reads: a server needs Docker, the deploy user owning `/srv`
+  and devopsy, and this script is one way to get them.
 
 ## Design decisions and gotchas
 
@@ -30,14 +33,11 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
 
 - Settings are validated, then saved, before any step runs: a failed run
   remembers them, and a typo never sticks.
-- `env_set` replaces a key in place: appending reordered files and made
-  reruns rewrite them.
-- `DEVOPSY_ACME_PRODUCTION` only applies when Traefik's `.env` is first
-  written; afterwards `devopsy letsencrypt` switches, and reruns never undo
-  that.
 - The installed copy (`/usr/local/sbin/devopsy-server`) updates itself before
-  running. The traefik step never pulls `/srv/traefik`: upgrading the proxy of
-  every site stays a deliberate `git pull` and `devopsy restart`.
+  running.
+- Until October 2026 a `traefik` step cloned devopsy-traefik, wrote its
+  `.env`, `/etc/devopsy/devopsy.env` and a Cloudflare range timer. The `cli`
+  step removes the last two from servers that still have them.
 - Testing with OrbStack: machines lack openssh-server and mask
   systemd-resolved. To reproduce the cloud port 53 clash, bind a listener to
   127.0.0.53:53 (a few lines of python) before starting acme-dns. Right after
