@@ -88,16 +88,18 @@ In GitLab, under Settings > CI/CD > Variables, add:
 - `DEVOPSY_SSH_KNOWN_HOSTS`: the output of `ssh-keyscan <server>`, type File.
   Check its fingerprints against the ones the script printed.
 
-A job can then run devopsy on the server:
+A job can then release the project with devopsy, which takes SSH options
+from `DEVOPSY_SSH_COMMAND`:
 
 ```yaml
 deploy:
   image: alpine:latest
   script:
-    - apk add --no-cache openssh-client
+    - apk add --no-cache openssh-client curl
+    - curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh | sh
     - chmod 600 "$DEVOPSY_SSH_KEY"
-    - ssh -i "$DEVOPSY_SSH_KEY" -o UserKnownHostsFile="$DEVOPSY_SSH_KNOWN_HOSTS"
-        devopsy@your-server 'cd /srv/my-project && devopsy deploy'
+    - DEVOPSY_SSH_COMMAND="ssh -i $DEVOPSY_SSH_KEY -o UserKnownHostsFile=$DEVOPSY_SSH_KNOWN_HOSTS"
+        devopsy @prod release
 ```
 
 GitLab cannot mask a multi-line key, so never print the variable in a job.
