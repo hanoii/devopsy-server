@@ -100,7 +100,7 @@ deploy:
     - curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh | sh
     - chmod 600 "$DEVOPSY_SSH_KEY"
     - DEVOPSY_SSH_COMMAND="ssh -i $DEVOPSY_SSH_KEY -o UserKnownHostsFile=$DEVOPSY_SSH_KNOWN_HOSTS"
-        devopsy @prod release
+        devopsy @prod --release
 ```
 
 GitLab cannot mask a multi-line key, so never print the variable in a job.
