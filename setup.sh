@@ -20,6 +20,7 @@ CONFIG_FILE=/etc/devopsy/server.env
 SETTINGS=(
   DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SWAP DEVOPSY_AUTO_REBOOT_TIME
   DEVOPSY_CLI_VERSION DEVOPSY_SERVER_VERSION DEVOPSY_APT_PACKAGES
+  DEVOPSY_ROOT
 )
 
 log() { printf '\033[0;36m[devopsy-server]\033[0m %s\n' "$*"; }
@@ -52,6 +53,7 @@ load_settings() {
   DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
   DEVOPSY_CLI_VERSION=${DEVOPSY_CLI_VERSION:-latest}
   DEVOPSY_SERVER_VERSION=${DEVOPSY_SERVER_VERSION:-main}
+  DEVOPSY_ROOT=${DEVOPSY_ROOT:-}
 }
 
 # Rejects bad values before they are saved, so a typo does not stick.
@@ -61,6 +63,10 @@ validate_settings() {
   for pkg in $DEVOPSY_APT_PACKAGES; do
     [[ $pkg =~ $name_re ]] || die "'$pkg' in DEVOPSY_APT_PACKAGES is not a package name"
   done
+  if [ -n "$DEVOPSY_ROOT" ]; then
+    [[ $DEVOPSY_ROOT =~ ^/[A-Za-z0-9._/-]+$ ]] && [ "$DEVOPSY_ROOT" != / ] \
+      || die "DEVOPSY_ROOT must be an absolute directory, not /: $DEVOPSY_ROOT"
+  fi
 }
 
 save_settings() {
@@ -193,9 +199,7 @@ step_user() {
     usermod -aG docker "$DEVOPSY_USER"
   fi
 
-  # Projects live in /srv: `devopsy @target --release` creates their
-  # directories as this user. Not recursive: only /srv itself.
-  chown "$DEVOPSY_USER:$DEVOPSY_USER" /srv
+  step_user_root
 
   if [ "$DEVOPSY_SUDO" = 1 ]; then
     echo "$DEVOPSY_USER ALL=(ALL) NOPASSWD:ALL" | write_file "/etc/sudoers.d/90-devopsy" 440 || true
@@ -220,6 +224,33 @@ step_user() {
   else
     warn "user: root has no authorized keys, add some to $keys to log in as $DEVOPSY_USER"
   fi
+}
+
+# Where releases live: the deploy user's home, unless DEVOPSY_ROOT names
+# another directory (a block volume, say). devopsy reads it from the deploy
+# user's own config, releases: root; this step writes that file, marked as
+# its own, and never touches one it did not write.
+step_user_root() {
+  local home config marker="# Written by devopsy-server (DEVOPSY_ROOT)."
+  home=$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)
+  config=$home/.config/devopsy/config.yaml
+  if [ -f "$config" ] && ! head -n 1 "$config" | grep -qxF "$marker"; then
+    [ -z "$DEVOPSY_ROOT" ] || warn "user: $config exists and was not written by devopsy-server: set releases: root: $DEVOPSY_ROOT in it yourself"
+    return 0
+  fi
+  if [ -z "$DEVOPSY_ROOT" ]; then
+    if [ -f "$config" ]; then
+      rm -f "$config"
+      log "user: releases live in $home again"
+    fi
+    return 0
+  fi
+  # Not recursive: only the root itself, so releases create directories.
+  install -d "$DEVOPSY_ROOT"
+  chown "$DEVOPSY_USER:$DEVOPSY_USER" "$DEVOPSY_ROOT"
+  install -d -m 755 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$home/.config" "$home/.config/devopsy"
+  printf '%s\nreleases:\n  root: %s\n' "$marker" "$DEVOPSY_ROOT" | write_file "$config" 644 || true
+  chown "$DEVOPSY_USER:$DEVOPSY_USER" "$config"
 }
 
 step_upgrades() {
@@ -252,21 +283,6 @@ step_cli() {
   head -n 1 "$tmp" | grep -q '^#!/usr/bin/env bash' || die "cli: could not download devopsy-server ($DEVOPSY_SERVER_VERSION)"
   install -m 755 "$tmp" /usr/local/sbin/devopsy-server
   rm -f "$tmp"
-
-  # Left by versions that set up Traefik themselves: devopsy no longer reads
-  # devopsy.env (releases get the wildcard domain from Traefik), and the range refresh
-  # ran in a clone that releases replace.
-  if [ -f /etc/devopsy/devopsy.env ]; then
-    rm -f /etc/devopsy/devopsy.env
-    log "cli: removed /etc/devopsy/devopsy.env (releases now get the wildcard domain from the server's Traefik)"
-  fi
-  local unit=/etc/systemd/system/devopsy-cloudflare-ips
-  if [ -f "$unit.timer" ]; then
-    systemctl disable --now devopsy-cloudflare-ips.timer >/dev/null 2>&1 || true
-    rm -f "$unit.timer" "$unit.service"
-    systemctl daemon-reload
-    log "cli: removed the devopsy-cloudflare-ips timer (see devopsy-template-traefik's README to schedule refreshes)"
-  fi
 }
 
 # An SSH key for CI to log in as the deploy user and run deployments. The
