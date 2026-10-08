@@ -22,7 +22,7 @@ table and "Things to know".
   the `ci-key` step does. A plain rerun must not print them.
 - Keep it a bootstrap: the host only. Per-project deployment belongs in
   projects' `.devopsy/`, and Traefik is released like any project
-  (devopsy-traefik). Nothing here knows about Traefik or writes settings
+  (devopsy-template-traefik). Nothing here knows about Traefik or writes settings
   devopsy-cli reads: a server needs Docker, the deploy user owning `/srv`
   and devopsy, and this script is one way to get them.
 
@@ -35,7 +35,7 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   remembers them, and a typo never sticks.
 - The installed copy (`/usr/local/sbin/devopsy-server`) updates itself before
   running.
-- Until October 2026 a `traefik` step cloned devopsy-traefik, wrote its
+- Until October 2026 a `traefik` step cloned devopsy-template-traefik, wrote its
   `.env`, `/etc/devopsy/devopsy.env` and a Cloudflare range timer. The `cli`
   step removes the last two from servers that still have them.
 - Testing with OrbStack: machines lack openssh-server and mask

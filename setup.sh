@@ -10,7 +10,7 @@
 # Settings come from the environment, and are saved to $CONFIG_FILE so a rerun
 # reuses them. See README.md.
 #
-# It prepares the host only: Traefik (devopsy-traefik) and projects are
+# It prepares the host only: Traefik (devopsy-template-traefik) and projects are
 # released onto it with devopsy, like any project.
 set -euo pipefail
 
@@ -265,7 +265,7 @@ step_cli() {
     systemctl disable --now devopsy-cloudflare-ips.timer >/dev/null 2>&1 || true
     rm -f "$unit.timer" "$unit.service"
     systemctl daemon-reload
-    log "cli: removed the devopsy-cloudflare-ips timer (see devopsy-traefik's README to schedule refreshes)"
+    log "cli: removed the devopsy-cloudflare-ips timer (see devopsy-template-traefik's README to schedule refreshes)"
   fi
 }
 
