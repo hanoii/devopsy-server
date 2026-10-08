@@ -4,7 +4,7 @@ Turns a fresh Debian 13 server into a devopsy host: Docker, a deploy user
 owning `/srv`, automatic security upgrades and the
 [devopsy CLI](https://github.com/hanoii/devopsy-cli). Everything else is
 released onto it with devopsy, from your machine or CI, starting with
-[Traefik](https://github.com/hanoii/devopsy-traefik).
+[Traefik](https://github.com/hanoii/devopsy-template-traefik).
 
 It is one bash script, `setup.sh`. Every step is safe to rerun, so the same
 command sets up a new server and brings an old one up to date.
@@ -17,7 +17,7 @@ As root on the server:
 curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash
 ```
 
-Then release Traefik onto it from a devopsy-traefik checkout (its README,
+Then release Traefik onto it from a devopsy-template-traefik checkout (its README,
 "Setup"), and your projects after it.
 
 The script installs itself as `devopsy-server`, which updates itself to the
@@ -58,14 +58,14 @@ and environment variables override them.
 | `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13. Not saved. |
 
 Traefik's settings (ACME email, resolvers, acme-dns, the wildcard domain,
-Cloudflare) are devopsy-traefik's, in its `shared/.env` on the server; see
+Cloudflare) are devopsy-template-traefik's, in its `shared/.env` on the server; see
 its README.
 
 ### Servers set up by earlier versions
 
-They had a `traefik` step that cloned devopsy-traefik into `/srv/traefik`,
+They had a `traefik` step that cloned devopsy-template-traefik into `/srv/traefik`,
 wrote `/etc/devopsy/devopsy.env` and a weekly Cloudflare range timer. Move
-the clone into the release layout as devopsy-traefik's README describes
+the clone into the release layout as devopsy-template-traefik's README describes
 ("From a clone", with `DEVOPSY_PROXY_WILDCARD_DOMAIN` for the wildcard
 domain), run `devopsy-server`, then release each project again so it gets
 the wildcard domain from Traefik. Its `cli` step removes `/etc/devopsy/devopsy.env` and
