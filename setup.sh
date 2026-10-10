@@ -172,8 +172,9 @@ EOF
 
   # Rotated logs, so containers cannot fill the disk, and live-restore, so a
   # Docker upgrade does not stop running containers. Address pools of /24
-  # networks: Docker's default cuts the same ranges into /16 and /20, about
-  # 30 networks, and every project environment takes at least one.
+  # networks: Docker's default cuts nearly the same ranges into /16 and /20,
+  # about 30 networks, and every project environment takes at least one.
+  # Docker reads the first base as 172.16.0.0/12.
   if write_file /etc/docker/daemon.json <<'EOF'; then
 {
   "log-driver": "local",
@@ -183,7 +184,7 @@ EOF
   },
   "live-restore": true,
   "default-address-pools": [
-    {"base": "172.17.0.0/12", "size": 24},
+    {"base": "172.16.0.0/12", "size": 24},
     {"base": "192.168.0.0/16", "size": 24}
   ]
 }

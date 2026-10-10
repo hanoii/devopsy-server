@@ -115,9 +115,11 @@ GitLab cannot mask a multi-line key, so never print the variable in a job.
 - **SSH is left alone.** The script doesn't change the SSH server's
   configuration. Set it up as your provider does, with key login.
 - **Thousands of Docker networks, not 30.** Docker's default address pools
-  cut `172.17.0.0/12` into /16 networks and `192.168.0.0/16` into /20 ones:
-  about 30 per host, and every project environment takes at least one. The
-  same ranges are cut into /24 networks here (254 addresses each). Networks
+  cut `172.17.0.0` to `172.31.255.255` into /16 networks and
+  `192.168.0.0/16` into /20 ones: about 30 per host, and every project
+  environment takes at least one. Here `172.16.0.0/12` (the same, plus
+  `172.16.x`) and `192.168.0.0/16` are cut into /24 networks, 254 addresses
+  each. Networks
   that already exist keep their size until recreated (`devopsy down`, then
   `up`). Where the server must reach other hosts in those ranges (a
   corporate network on `172.16.0.0/12`), set `default-address-pools` in
