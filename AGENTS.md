@@ -44,7 +44,9 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   only work for its owner. `/usr/local/bin` itself stays root's, and SSH
   sessions without a login shell have it in `PATH`, unlike `~/.local/bin`.
   The installer runs as the deploy user, so root never runs what it
-  downloads.
+  downloads. The `cli` step only installs a missing devopsy: upgrading is
+  `devopsy --upgrade`, the one way, so there is no version setting to
+  disagree with what the deploy user chose.
 - Testing with OrbStack: machines lack openssh-server and mask
   systemd-resolved. To reproduce the cloud port 53 clash, bind a listener to
   127.0.0.53:53 (a few lines of python) before starting acme-dns. Right after

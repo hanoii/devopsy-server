@@ -19,7 +19,7 @@ CONFIG_FILE=/etc/devopsy/server.env
 # Settings saved to $CONFIG_FILE.
 SETTINGS=(
   DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SWAP DEVOPSY_AUTO_REBOOT_TIME
-  DEVOPSY_CLI_VERSION DEVOPSY_SERVER_VERSION DEVOPSY_APT_PACKAGES
+  DEVOPSY_SERVER_VERSION DEVOPSY_APT_PACKAGES
   DEVOPSY_ROOT
 )
 
@@ -51,7 +51,6 @@ load_settings() {
   DEVOPSY_SWAP=${DEVOPSY_SWAP:-}
   DEVOPSY_AUTO_REBOOT_TIME=${DEVOPSY_AUTO_REBOOT_TIME:-}
   DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
-  DEVOPSY_CLI_VERSION=${DEVOPSY_CLI_VERSION:-latest}
   DEVOPSY_SERVER_VERSION=${DEVOPSY_SERVER_VERSION:-main}
   DEVOPSY_ROOT=${DEVOPSY_ROOT:-}
 }
@@ -280,15 +279,19 @@ EOF
 step_cli() {
   local tmp dir=/usr/local/lib/devopsy link=/usr/local/bin/devopsy
   id "$DEVOPSY_USER" >/dev/null 2>&1 || die "cli: $DEVOPSY_USER does not exist, run the user step"
-  log "cli: installing devopsy ($DEVOPSY_CLI_VERSION)"
   # The binary is the deploy user's, in a directory of its own, so it runs
   # `devopsy --upgrade` itself; the link keeps it in everyone's PATH, SSH
-  # sessions without a login shell included.
-  # The installer always comes from main; it installs the release asked for.
-  install -d -m 755 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir"
-  # From /: the deploy user cannot read root's working directory.
-  (cd / && curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh" \
-    | as_user DEVOPSY_VERSION="$DEVOPSY_CLI_VERSION" DEVOPSY_INSTALL_DIR="$dir" sh >/dev/null)
+  # sessions without a login shell included. Installed once: upgrades are
+  # the deploy user's, so a version it chose stays.
+  if [ -x "$dir/devopsy" ]; then
+    log "cli: devopsy is installed: 'devopsy --upgrade' as $DEVOPSY_USER upgrades it"
+  else
+    log "cli: installing devopsy"
+    install -d -m 755 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir"
+    # From /: the deploy user cannot read root's working directory.
+    (cd / && curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh" \
+      | as_user DEVOPSY_INSTALL_DIR="$dir" sh >/dev/null)
+  fi
   if [ "$(readlink "$link" 2>/dev/null)" != "$dir/devopsy" ]; then
     # Renamed into place, so devopsy never goes missing under a release.
     ln -s "$dir/devopsy" "$link.new"
