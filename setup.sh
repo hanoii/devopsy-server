@@ -171,7 +171,9 @@ EOF
   apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   # Rotated logs, so containers cannot fill the disk, and live-restore, so a
-  # Docker upgrade does not stop running containers.
+  # Docker upgrade does not stop running containers. Address pools of /24
+  # networks: Docker's default cuts the same ranges into /16 and /20, about
+  # 30 networks, and every project environment takes at least one.
   if write_file /etc/docker/daemon.json <<'EOF'; then
 {
   "log-driver": "local",
@@ -179,7 +181,11 @@ EOF
     "max-size": "20m",
     "max-file": "5"
   },
-  "live-restore": true
+  "live-restore": true,
+  "default-address-pools": [
+    {"base": "172.17.0.0/12", "size": 24},
+    {"base": "192.168.0.0/16", "size": 24}
+  ]
 }
 EOF
     log "docker: restarting to apply daemon.json"
