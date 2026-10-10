@@ -37,6 +37,14 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   remembers them, and a typo never sticks.
 - The installed copy (`/usr/local/sbin/devopsy-server`) updates itself before
   running.
+- `devopsy` is the deploy user's, in `/usr/local/lib/devopsy`, so `devopsy
+  --upgrade` needs no root (it resolves the `/usr/local/bin/devopsy` link
+  and replaces the file in its own directory). Not in the user's home:
+  homes are mode 700 or 750 on some distributions, and the link would then
+  only work for its owner. `/usr/local/bin` itself stays root's, and SSH
+  sessions without a login shell have it in `PATH`, unlike `~/.local/bin`.
+  The installer runs as the deploy user, so root never runs what it
+  downloads.
 - Testing with OrbStack: machines lack openssh-server and mask
   systemd-resolved. To reproduce the cloud port 53 clash, bind a listener to
   127.0.0.53:53 (a few lines of python) before starting acme-dns. Right after
