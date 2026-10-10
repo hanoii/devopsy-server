@@ -42,7 +42,7 @@ and environment variables override them.
 | `docker`   | Docker Engine and the Compose plugin from Docker's apt repository. Rotated logs, `live-restore` and /24 address pools for networks. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
-| `cli`      | Installs or updates `devopsy` in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`, and this script as `devopsy-server` in `/usr/local/sbin`. |
+| `cli`      | Installs `devopsy`, when missing, in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`. Installs or updates this script as `devopsy-server` in `/usr/local/sbin`. |
 | `ci-key`   | Creates an SSH key that lets CI log in as the deploy user, and prints it. See below. |
 
 ## Settings
@@ -54,7 +54,6 @@ and environment variables override them.
 | `DEVOPSY_APT_PACKAGES`     |         | Extra Debian packages to install, space separated, like `htop ncdu`. Removing one from the list does not uninstall it. |
 | `DEVOPSY_SWAP`             |         | Swap file size, like `2G`. |
 | `DEVOPSY_AUTO_REBOOT_TIME` |         | Reboot after upgrades that need it, at this time, like `04:00`. |
-| `DEVOPSY_CLI_VERSION`      | `latest` | devopsy-cli release to install, like `v0.1.0`. |
 | `DEVOPSY_SERVER_VERSION`   | `main`  | devopsy-server branch or tag installed as `devopsy-server`. |
 | `DEVOPSY_ROOT`             |         | Where releases live, like `/srv` on a block volume; default the deploy user's home. Written as `releases: root` in the deploy user's `~/.config/devopsy/config.yaml` (devopsy-cli's README, "Release settings of a server"); a file there that devopsy-server did not write is left alone. |
 | `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13. Not saved. |
@@ -108,7 +107,9 @@ GitLab cannot mask a multi-line key, so never print the variable in a job.
 - **The deploy user is effectively root.** Membership in the `docker` group
   allows root access through Docker. Treat its keys accordingly.
 - **The deploy user owns `devopsy`.** `ssh devopsy@<server> devopsy
-  --upgrade` upgrades it, without root. `/usr/local/bin/devopsy` is a link
+  --upgrade` upgrades it, without root, and `--upgrade vX.Y.Z` installs
+  that release. Setup installs the latest release once and never upgrades
+  it. `/usr/local/bin/devopsy` is a link
   to it, so whoever runs `devopsy` there, root included, runs a file the
   deploy user can replace: nothing it could not do already.
 - **No host firewall.** Use your provider's firewall and allow only SSH, 80
