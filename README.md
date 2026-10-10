@@ -39,7 +39,7 @@ and environment variables override them.
 | ---------- | ------------ |
 | `base`     | Installs curl, git, jq, openssh-client, unattended-upgrades and sudo, plus `DEVOPSY_APT_PACKAGES`. |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
-| `docker`   | Docker Engine and the Compose plugin from Docker's apt repository. Rotated logs and `live-restore`. |
+| `docker`   | Docker Engine and the Compose plugin from Docker's apt repository. Rotated logs, `live-restore` and /24 address pools for networks. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
 | `cli`      | Installs or updates `devopsy` in `/usr/local/bin`, and this script as `devopsy-server` in `/usr/local/sbin`. |
@@ -114,6 +114,14 @@ GitLab cannot mask a multi-line key, so never print the variable in a job.
   only, and reach it through an SSH tunnel.
 - **SSH is left alone.** The script doesn't change the SSH server's
   configuration. Set it up as your provider does, with key login.
+- **Thousands of Docker networks, not 30.** Docker's default address pools
+  cut `172.17.0.0/12` into /16 networks and `192.168.0.0/16` into /20 ones:
+  about 30 per host, and every project environment takes at least one. The
+  same ranges are cut into /24 networks here (254 addresses each). Networks
+  that already exist keep their size until recreated (`devopsy down`, then
+  `up`). Where the server must reach other hosts in those ranges (a
+  corporate network on `172.16.0.0/12`), set `default-address-pools` in
+  `/etc/docker/daemon.json` to a range nobody uses.
 - Only Debian security updates are automatic. Upgrade Docker by hand with
   `apt upgrade`. `live-restore` keeps containers running while it restarts.
 
