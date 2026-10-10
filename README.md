@@ -42,7 +42,7 @@ and environment variables override them.
 | `docker`   | Docker Engine and the Compose plugin from Docker's apt repository. Rotated logs, `live-restore` and /24 address pools for networks. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
-| `cli`      | Installs or updates `devopsy` in `/usr/local/bin`, and this script as `devopsy-server` in `/usr/local/sbin`. |
+| `cli`      | Installs or updates `devopsy` in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`, and this script as `devopsy-server` in `/usr/local/sbin`. |
 | `ci-key`   | Creates an SSH key that lets CI log in as the deploy user, and prints it. See below. |
 
 ## Settings
@@ -107,6 +107,10 @@ GitLab cannot mask a multi-line key, so never print the variable in a job.
 
 - **The deploy user is effectively root.** Membership in the `docker` group
   allows root access through Docker. Treat its keys accordingly.
+- **The deploy user owns `devopsy`.** `ssh devopsy@<server> devopsy
+  --upgrade` upgrades it, without root. `/usr/local/bin/devopsy` is a link
+  to it, so whoever runs `devopsy` there, root included, runs a file the
+  deploy user can replace: nothing it could not do already.
 - **No host firewall.** Use your provider's firewall and allow only SSH, 80
   and 443. Docker would bypass a host firewall like ufw anyway: a port
   published by a container is open whatever ufw says.

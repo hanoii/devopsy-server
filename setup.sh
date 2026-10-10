@@ -278,11 +278,22 @@ EOF
 }
 
 step_cli() {
-  local tmp
+  local tmp dir=/usr/local/lib/devopsy link=/usr/local/bin/devopsy
+  id "$DEVOPSY_USER" >/dev/null 2>&1 || die "cli: $DEVOPSY_USER does not exist, run the user step"
   log "cli: installing devopsy ($DEVOPSY_CLI_VERSION)"
+  # The binary is the deploy user's, in a directory of its own, so it runs
+  # `devopsy --upgrade` itself; the link keeps it in everyone's PATH, SSH
+  # sessions without a login shell included.
   # The installer always comes from main; it installs the release asked for.
+  install -d -m 755 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir"
   curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh" \
-    | DEVOPSY_VERSION=$DEVOPSY_CLI_VERSION DEVOPSY_INSTALL_DIR=/usr/local/bin sh >/dev/null
+    | as_user DEVOPSY_VERSION="$DEVOPSY_CLI_VERSION" DEVOPSY_INSTALL_DIR="$dir" sh >/dev/null
+  if [ "$(readlink "$link" 2>/dev/null)" != "$dir/devopsy" ]; then
+    # Renamed into place, so devopsy never goes missing under a release.
+    ln -s "$dir/devopsy" "$link.new"
+    mv -T "$link.new" "$link"
+    log "cli: linked $link to $dir/devopsy"
+  fi
 
   log "cli: installing devopsy-server ($DEVOPSY_SERVER_VERSION)"
   tmp=$(mktemp)
