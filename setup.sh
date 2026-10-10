@@ -286,8 +286,9 @@ step_cli() {
   # sessions without a login shell included.
   # The installer always comes from main; it installs the release asked for.
   install -d -m 755 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir"
-  curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh" \
-    | as_user DEVOPSY_VERSION="$DEVOPSY_CLI_VERSION" DEVOPSY_INSTALL_DIR="$dir" sh >/dev/null
+  # From /: the deploy user cannot read root's working directory.
+  (cd / && curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh" \
+    | as_user DEVOPSY_VERSION="$DEVOPSY_CLI_VERSION" DEVOPSY_INSTALL_DIR="$dir" sh >/dev/null)
   if [ "$(readlink "$link" 2>/dev/null)" != "$dir/devopsy" ]; then
     # Renamed into place, so devopsy never goes missing under a release.
     ln -s "$dir/devopsy" "$link.new"
