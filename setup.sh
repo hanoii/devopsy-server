@@ -325,19 +325,23 @@ step_ci_key() {
   fi
 
   # `restrict` turns off port, agent and X11 forwarding and the pty; commands
-  # still run, which is all CI needs. `agent-forwarding` adds back the one
-  # thing `devopsy --clone` needs across servers: CI's agent forwarded to the
-  # parent's server, so it can reach the child. A line from an earlier run
-  # (plain `restrict`) is upgraded in place.
-  local auth=$home/.ssh/authorized_keys pub old tmp
+  # still run, which is all CI needs. `devopsy --clone` across servers adds
+  # back two things: CI's agent forwarded to the parent's server, so it can
+  # reach the child, and port forwarding, since the parent reaches its rsync
+  # daemon through a reverse forward on the child (the same key, through the
+  # agent). A `restrict...` line from an earlier run is upgraded in place;
+  # a line someone edited by hand (other options) is left alone.
+  local auth=$home/.ssh/authorized_keys pub line tmp
   pub=$(cat "$key.pub")
-  old="restrict $pub"
-  line="restrict,agent-forwarding $pub"
+  line="restrict,agent-forwarding,port-forwarding $pub"
   if ! grep -qxF "$line" "$auth" 2>/dev/null; then
-    if grep -qxF "$old" "$auth" 2>/dev/null; then
+    if grep -qF -- " $pub" "$auth" 2>/dev/null; then
       tmp=$(mktemp)
       while IFS= read -r l || [ -n "$l" ]; do
-        if [ "$l" = "$old" ]; then printf '%s\n' "$line"; else printf '%s\n' "$l"; fi
+        case $l in
+          "restrict $pub" | "restrict,"*" $pub") printf '%s\n' "$line" ;;
+          *) printf '%s\n' "$l" ;;
+        esac
       done <"$auth" >"$tmp"
       cat "$tmp" >"$auth"
       rm -f "$tmp"
