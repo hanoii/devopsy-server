@@ -64,6 +64,10 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   containers starting before the mount write their bind mounts to the root
   disk, hidden under the volume. Done by hand on builder1; not automated
   (see ROADMAP.md).
+- The `ci-key` authorized_keys line is `restrict,agent-forwarding`: only
+  agent forwarding is added back, for `devopsy --clone` across servers. An
+  older plain `restrict` line is rewritten in place (same position, other
+  keys untouched), so reruns stay idempotent.
 - The first run prints the CI private key (`ci-key`). Run setup where its
   output is not logged, or replace the key afterwards.
 
