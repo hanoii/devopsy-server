@@ -97,11 +97,12 @@ GitLab cannot mask a multi-line key, so never print the variable in a job.
 
 ## Things to know
 
-- **The CI key allows agent forwarding.** It stays restricted (no port
-  forwarding, no pty, no X11), but `authorized_keys` carries
-  `restrict,agent-forwarding`, because `devopsy --clone` across servers
-  forwards the operator's or CI's agent to the parent's server. A plain
-  `restrict` line from an earlier run is upgraded in place on the next run.
+- **The CI key allows agent and port forwarding.** It stays restricted
+  (no pty, no X11), but `authorized_keys` carries
+  `restrict,agent-forwarding,port-forwarding`, because `devopsy --clone`
+  across servers forwards CI's agent to the parent's server, which then
+  reaches the child with that key and a reverse forward to its rsync
+  daemon. A line from an earlier run is upgraded in place on the next run.
 - **A block volume for releases.** Releases and their data live in the
   deploy user's home, or `DEVOPSY_ROOT`. Providers mount volumes elsewhere
   (DigitalOcean: `/mnt/<volume>`); mount it where you want releases, like
