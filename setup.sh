@@ -324,13 +324,28 @@ step_ci_key() {
     created=1
   fi
 
-  # `restrict` turns off port, agent and X11 forwarding and the pty. Commands
-  # still run, which is all CI needs.
-  line="restrict $(cat "$key.pub")"
-  if ! grep -qxF "$line" "$home/.ssh/authorized_keys" 2>/dev/null; then
-    printf '%s\n' "$line" >>"$home/.ssh/authorized_keys"
-    chown "$DEVOPSY_USER:$DEVOPSY_USER" "$home/.ssh/authorized_keys"
-    chmod 600 "$home/.ssh/authorized_keys"
+  # `restrict` turns off port, agent and X11 forwarding and the pty; commands
+  # still run, which is all CI needs. `agent-forwarding` adds back the one
+  # thing `devopsy --clone` needs across servers: CI's agent forwarded to the
+  # parent's server, so it can reach the child. A line from an earlier run
+  # (plain `restrict`) is upgraded in place.
+  local auth=$home/.ssh/authorized_keys pub old tmp
+  pub=$(cat "$key.pub")
+  old="restrict $pub"
+  line="restrict,agent-forwarding $pub"
+  if ! grep -qxF "$line" "$auth" 2>/dev/null; then
+    if grep -qxF "$old" "$auth" 2>/dev/null; then
+      tmp=$(mktemp)
+      while IFS= read -r l || [ -n "$l" ]; do
+        if [ "$l" = "$old" ]; then printf '%s\n' "$line"; else printf '%s\n' "$l"; fi
+      done <"$auth" >"$tmp"
+      cat "$tmp" >"$auth"
+      rm -f "$tmp"
+    else
+      printf '%s\n' "$line" >>"$auth"
+    fi
+    chown "$DEVOPSY_USER:$DEVOPSY_USER" "$auth"
+    chmod 600 "$auth"
     log "ci-key: authorized for $DEVOPSY_USER"
   fi
 
