@@ -27,6 +27,12 @@ table and "Things to know".
   (`DEVOPSY_ROOT`, as `releases: root` in the deploy user's devopsy config,
   in a file marked as written here): a server needs Docker, the deploy user
   and devopsy, and this script is one way to get them.
+- Not a CLI. Steps with defaults, run once or rerun whole; no
+  subcommands for day-to-day operation (importing a CI key from another
+  server, rotating keys, listing things). What a server needs after setup
+  is `devopsy` and plain SSH; what several servers need to share, the
+  operator carries (one CI key authorized by hand on each, or every
+  server's key in CI's agent).
 
 ## Design decisions and gotchas
 
