@@ -96,6 +96,17 @@ deploy:
 
 GitLab cannot mask a multi-line key, so never print the variable in a job.
 
+A clone across servers (`devopsy @pr-12 --release` with its parent on
+another server) needs an agent instead of `-i`: the parent's server
+reaches the child's with the keys CI forwards, so the agent holds both
+servers' CI keys, each server having generated its own:
+
+```sh
+eval "$(ssh-agent)"
+ssh-add "$DEVOPSY_SSH_KEY" "$DEVOPSY_SSH_KEY_CHILD"
+DEVOPSY_SSH_COMMAND="ssh -o UserKnownHostsFile=$DEVOPSY_SSH_KNOWN_HOSTS" devopsy @pr-12 --release
+```
+
 ## Things to know
 
 - **The CI key allows agent and port forwarding.** It stays restricted
