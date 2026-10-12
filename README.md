@@ -65,7 +65,8 @@ its README.
 ## Deploying from CI
 
 The `ci-key` step creates `~devopsy/.ssh/devopsy_ci_ed25519` and authorizes
-it for the deploy user, without port forwarding. It prints the
+it for the deploy user, restricted to commands plus the agent and port
+forwarding `devopsy --clone` needs (below). It prints the
 private key and the server's host key fingerprints the first time. Print
 them again with:
 
