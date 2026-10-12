@@ -329,27 +329,31 @@ step_ci_key() {
   # back two things: CI's agent forwarded to the parent's server, so it can
   # reach the child, and port forwarding, since the parent reaches its rsync
   # daemon through a reverse forward on the child (the same key, through the
-  # agent). A `restrict...` line from an earlier run is upgraded in place;
-  # a line someone edited by hand (other options) is left alone.
-  local auth=$home/.ssh/authorized_keys pub line tmp
+  # agent). The lines earlier runs wrote (`restrict`, then
+  # `restrict,agent-forwarding`) are upgraded in place, one line however
+  # many; a line someone edited by hand (other options) is left alone, and
+  # then no line is added: sshd takes the first match. The file is
+  # rebuilt through write_file: written whole only when it changes, never
+  # truncated in place, and a last line without a newline stays a line.
+  local auth=$home/.ssh/authorized_keys pub line
   pub=$(cat "$key.pub")
   line="restrict,agent-forwarding,port-forwarding $pub"
-  if ! grep -qxF "$line" "$auth" 2>/dev/null; then
-    if grep -qF -- " $pub" "$auth" 2>/dev/null; then
-      tmp=$(mktemp)
-      while IFS= read -r l || [ -n "$l" ]; do
-        case $l in
-          "restrict $pub" | "restrict,"*" $pub") printf '%s\n' "$line" ;;
-          *) printf '%s\n' "$l" ;;
-        esac
-      done <"$auth" >"$tmp"
-      cat "$tmp" >"$auth"
-      rm -f "$tmp"
-    else
-      printf '%s\n' "$line" >>"$auth"
-    fi
+  if {
+    found=0
+    [ ! -f "$auth" ] || while IFS= read -r l || [ -n "$l" ]; do
+      case $l in
+        "$line" | "restrict $pub" | "restrict,agent-forwarding $pub")
+          [ "$found" = 0 ] || continue
+          found=1
+          printf '%s\n' "$line"
+          ;;
+        *" $pub") found=1; printf '%s\n' "$l" ;;
+        *) printf '%s\n' "$l" ;;
+      esac
+    done <"$auth"
+    [ "$found" = 1 ] || printf '%s\n' "$line"
+  } | write_file "$auth" 600; then
     chown "$DEVOPSY_USER:$DEVOPSY_USER" "$auth"
-    chmod 600 "$auth"
     log "ci-key: authorized for $DEVOPSY_USER"
   fi
 
