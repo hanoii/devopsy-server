@@ -75,9 +75,9 @@ devopsy-server ci-key
 ```
 
 The same from your machine, with the private key never on the server:
-`devopsy @<target> --keys generate --restricted` (devopsy-cli's README,
+`devopsy @<target> --ssh-keys generate --restricted` (devopsy-cli's README,
 "Keys on a server") makes the pair locally and authorizes its public half
-over SSH; `--keys` lists and removes keys, for rotation.
+over SSH; `--ssh-keys` lists and removes keys, for rotation.
 
 In GitLab, under Settings > CI/CD > Variables, add:
 
