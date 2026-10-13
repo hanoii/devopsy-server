@@ -107,6 +107,17 @@ ssh-add "$DEVOPSY_SSH_KEY" "$DEVOPSY_SSH_KEY_CHILD"
 DEVOPSY_SSH_COMMAND="ssh -o UserKnownHostsFile=$DEVOPSY_SSH_KNOWN_HOSTS" devopsy @pr-12 --release
 ```
 
+The parent's server can use every key in that agent for the session, so
+load only those two, never one for a server the parent should not reach
+(a staging server cloning to pull-request environments gets the agent,
+and must not hold production's key). OpenSSH 8.9 or later can also
+constrain each key to its path (`-h`, hosts as in the known hosts file):
+
+```sh
+ssh-add -H "$DEVOPSY_SSH_KNOWN_HOSTS" -h vm1 "$DEVOPSY_SSH_KEY"
+ssh-add -H "$DEVOPSY_SSH_KNOWN_HOSTS" -h vm2 -h 'vm1>vm2' "$DEVOPSY_SSH_KEY_CHILD"
+```
+
 ## Things to know
 
 - **The CI key allows agent and port forwarding.** It stays restricted
