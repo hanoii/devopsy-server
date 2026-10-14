@@ -67,7 +67,7 @@ its README.
 
 ## Deploying from CI
 
-Nothing here makes keys. From your machine, `devopsy --ssh-keys generate`
+Nothing here makes keys. From your machine, `devopsy --ssh-keys-generate`
 makes a pair and `devopsy @<target> --ssh-keys add ~/.ssh/devopsy-ci.pub
 --restricted` authorizes its public half for the deploy user, over SSH and
 without root; `--ssh-keys` lists and removes keys, for rotation
