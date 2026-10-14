@@ -12,14 +12,15 @@ table and "Things to know".
 - Write config files with `write_file`. It only writes and returns success
   when the content changed, so a service restarts only then.
 - New settings are `DEVOPSY_*` variables with a default in `load_settings`.
-  Add them to `SETTINGS` so they are saved, and to the README table.
+  Add them to `SETTINGS` so they are saved, to `usage` and to the README
+  table.
 - Never change the SSH server configuration. Providers set it up, and a
   mistake there locks the operator out.
 - No host firewall: the provider's firewall covers it. See README.md.
 - Debian 13 only. Use apt and systemd directly. No configuration management
   dependencies.
-- Only print secrets when they are created or explicitly asked for, like
-  the `ci-key` step does. A plain rerun must not print them.
+- Never create or print secrets. Keys for the deploy user are devopsy-cli's
+  (`--ssh-keys`), made on the operator's machine.
 - Keep it a bootstrap: the host only. Per-project deployment belongs in
   projects' `.devopsy/`, and Traefik is released like any project
   (devopsy-template-traefik). Nothing here knows about Traefik. The only
@@ -27,12 +28,19 @@ table and "Things to know".
   (`DEVOPSY_ROOT`, as `releases: root` in the deploy user's devopsy config,
   in a file marked as written here): a server needs Docker, the deploy user
   and devopsy, and this script is one way to get them.
-- Not a CLI. Steps with defaults, run once or rerun whole; no
-  subcommands for day-to-day operation (importing a CI key from another
-  server, rotating keys, listing things). What a server needs after setup
-  is `devopsy` and plain SSH; what several servers need to share, the
-  operator carries (one CI key authorized by hand on each, or every
-  server's key in CI's agent).
+- Not a CLI: a setup script. It takes no arguments but `--help`, runs
+  every step every time, and leaves no command on the server. No step
+  names, no subcommands, no installed copy that updates itself (all three
+  existed, removed in October 2026, with the `ci-key` step). A choice is a
+  `DEVOPSY_*` setting; what a server needs after setup is `devopsy` and
+  plain SSH.
+- A rerun upgrades what the script installed: the apt packages it names
+  (`apt-get install` upgrades an installed one), Docker among them, and
+  devopsy (`devopsy --upgrade` as the deploy user; a failure only warns).
+  Nothing else: no `dist-upgrade`.
+- `usage` lists every setting: a new one goes there, in `SETTINGS` and in
+  the README table. It runs before `preflight`, so `--help` works anywhere,
+  as any user, and shows the saved settings when it can read them.
 
 ## Design decisions and gotchas
 
@@ -41,8 +49,9 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
 
 - Settings are validated, then saved, before any step runs: a failed run
   remembers them, and a typo never sticks.
-- The installed copy (`/usr/local/sbin/devopsy-server`) updates itself before
-  running.
+- The `cli` step removes `/usr/local/sbin/devopsy-server`, the copy earlier
+  versions installed. Their CI key and its `authorized_keys` line are left
+  alone.
 - `devopsy` is the deploy user's, in `/usr/local/lib/devopsy`, so `devopsy
   --upgrade` needs no root (it resolves the `/usr/local/bin/devopsy` link
   and replaces the file in its own directory). Not in the user's home:
@@ -50,9 +59,9 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   only work for its owner. `/usr/local/bin` itself stays root's, and SSH
   sessions without a login shell have it in `PATH`, unlike `~/.local/bin`.
   The installer runs as the deploy user, so root never runs what it
-  downloads. The `cli` step only installs a missing devopsy: upgrading is
-  `devopsy --upgrade`, the one way, so there is no version setting to
-  disagree with what the deploy user chose.
+  downloads. A rerun runs `devopsy --upgrade` as that user, the one way to
+  upgrade, so there is no version setting: a pinned version lasts until the
+  next rerun.
 - Testing with OrbStack: machines lack openssh-server and mask
   systemd-resolved. To reproduce the cloud port 53 clash, bind a listener to
   127.0.0.53:53 (a few lines of python) before starting acme-dns. Right after
@@ -70,16 +79,6 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   containers starting before the mount write their bind mounts to the root
   disk, hidden under the volume. Done by hand on builder1; not automated
   (see ROADMAP.md).
-- The `ci-key` authorized_keys line is
-  `restrict,agent-forwarding,port-forwarding`: agent forwarding for
-  `devopsy --clone` across servers (CI's agent reaches the parent's
-  server), port forwarding because the parent then connects to the child
-  with that key and a `-R` to its rsync daemon, which `restrict` alone
-  refuses as "remote port forwarding failed". An older `restrict...` line
-  for the same key is rewritten in place (same position, other keys
-  untouched), so reruns stay idempotent.
-- The first run prints the CI private key (`ci-key`). Run setup where its
-  output is not logged, or replace the key afterwards.
 
 ## Checks
 
@@ -89,7 +88,8 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable setup.sh
 
 Test on a real Debian 13 machine, for example an OrbStack machine
 (`orb create debian:trixie devopsy-test`). Run the script with test settings,
-run it again without them to check idempotency and saved settings, then
+run it again without them to check idempotency, saved settings and
+`--help`, then
 `orb delete -f devopsy-test`.
 
 ## Commits
