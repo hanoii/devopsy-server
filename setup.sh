@@ -1,27 +1,62 @@
 #!/usr/bin/env bash
-# Prepares a fresh Debian 13 server for devopsy projects. Run as root:
+# Prepares a Debian 13 server for devopsy projects. Run as root:
 #
 #   curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash
 #
-# Every step is idempotent: rerun the whole script, or only some steps, at any
-# time. Pass step names as arguments (`bash -s -- docker cli` when piped).
-# The cli step also installs this script as `devopsy-server`, so later runs
-# are `devopsy-server [step...]`.
-# Settings come from the environment, and are saved to $CONFIG_FILE so a rerun
-# reuses them. See README.md.
+# Every step is idempotent, so the same command sets up a new server and
+# brings an old one up to date: its packages, Docker and devopsy. It takes
+# no arguments but --help (`bash -s -- --help` when piped), which lists the
+# settings. Settings come from the environment, and are saved to
+# $CONFIG_FILE so a rerun reuses them. See README.md.
 #
 # It prepares the host only: Traefik (devopsy-template-traefik) and projects are
 # released onto it with devopsy, like any project.
 set -euo pipefail
 
-STEPS=(base swap docker user upgrades cli ci-key)
+STEPS=(base swap docker user upgrades cli)
 CONFIG_FILE=/etc/devopsy/server.env
-# Settings saved to $CONFIG_FILE.
+# Settings saved to $CONFIG_FILE. A new one also goes in usage and README.md.
 SETTINGS=(
   DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SWAP DEVOPSY_AUTO_REBOOT_TIME
-  DEVOPSY_SERVER_VERSION DEVOPSY_APT_PACKAGES
-  DEVOPSY_ROOT
+  DEVOPSY_APT_PACKAGES DEVOPSY_ROOT
 )
+
+usage() {
+  cat <<EOF
+Prepares a Debian 13 server for devopsy: Docker, the deploy user, automatic
+security upgrades and the devopsy CLI. Run it as root, again at any time: a
+rerun changes only what differs, and upgrades the packages, Docker and
+devopsy.
+
+  curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash
+
+Settings are environment variables, all optional:
+
+  curl -fsSL ... | DEVOPSY_SWAP=2G DEVOPSY_ROOT=/srv bash
+
+  DEVOPSY_USER              The deploy user. Default: devopsy.
+  DEVOPSY_ROOT              Where releases live, like /srv on a block
+                            volume. Default: the deploy user's home.
+  DEVOPSY_SWAP              Size of a swap file to create when the server
+                            has no swap, like 2G. Default: none.
+  DEVOPSY_AUTO_REBOOT_TIME  Reboot after upgrades that need it, at this
+                            time, like 04:00. Default: never.
+  DEVOPSY_APT_PACKAGES      Extra Debian packages, space separated, like
+                            "htop ncdu".
+  DEVOPSY_SUDO              1 gives the deploy user passwordless sudo.
+                            Default: 0.
+  DEVOPSY_FORCE             1 runs on something other than Debian 13.
+                            Not saved.
+
+They are saved to $CONFIG_FILE: a rerun without them
+reuses them, and a variable set again replaces its saved value (set empty,
+like DEVOPSY_SWAP=, it goes back to its default).
+EOF
+  if [ -r "$CONFIG_FILE" ]; then
+    printf '\nSaved on this server:\n\n'
+    grep '^DEVOPSY_' "$CONFIG_FILE" | sed 's/^/  /'
+  fi
+}
 
 log() { printf '\033[0;36m[devopsy-server]\033[0m %s\n' "$*"; }
 warn() { printf '\033[0;33m[devopsy-server]\033[0m %s\n' "$*" >&2; }
@@ -51,7 +86,6 @@ load_settings() {
   DEVOPSY_SWAP=${DEVOPSY_SWAP:-}
   DEVOPSY_AUTO_REBOOT_TIME=${DEVOPSY_AUTO_REBOOT_TIME:-}
   DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
-  DEVOPSY_SERVER_VERSION=${DEVOPSY_SERVER_VERSION:-main}
   DEVOPSY_ROOT=${DEVOPSY_ROOT:-}
 }
 
@@ -277,18 +311,19 @@ EOF
 }
 
 step_cli() {
-  local tmp dir=/usr/local/lib/devopsy link=/usr/local/bin/devopsy
-  id "$DEVOPSY_USER" >/dev/null 2>&1 || die "cli: $DEVOPSY_USER does not exist, run the user step"
+  local dir=/usr/local/lib/devopsy link=/usr/local/bin/devopsy
   # The binary is the deploy user's, in a directory of its own, so it runs
-  # `devopsy --upgrade` itself; the link keeps it in everyone's PATH, SSH
-  # sessions without a login shell included. Installed once: upgrades are
-  # the deploy user's, so a version it chose stays.
+  # `devopsy --upgrade` itself, without root, as this step does on a rerun;
+  # the link keeps it in everyone's PATH, SSH sessions without a login shell
+  # included. From /: the deploy user cannot read root's working directory.
   if [ -x "$dir/devopsy" ]; then
-    log "cli: devopsy is installed: 'devopsy --upgrade' as $DEVOPSY_USER upgrades it"
+    log "cli: upgrading devopsy"
+    # Not fatal: the host is set up, and the installed devopsy keeps working.
+    (cd / && as_user "$dir/devopsy" --upgrade) \
+      || warn "cli: could not upgrade devopsy: 'devopsy --upgrade' as $DEVOPSY_USER tries again"
   else
     log "cli: installing devopsy"
     install -d -m 755 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir"
-    # From /: the deploy user cannot read root's working directory.
     (cd / && curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh" \
       | as_user DEVOPSY_INSTALL_DIR="$dir" sh >/dev/null)
   fi
@@ -299,137 +334,32 @@ step_cli() {
     log "cli: linked $link to $dir/devopsy"
   fi
 
-  log "cli: installing devopsy-server ($DEVOPSY_SERVER_VERSION)"
-  tmp=$(mktemp)
-  curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-server/$DEVOPSY_SERVER_VERSION/setup.sh" -o "$tmp"
-  head -n 1 "$tmp" | grep -q '^#!/usr/bin/env bash' || die "cli: could not download devopsy-server ($DEVOPSY_SERVER_VERSION)"
-  install -m 755 "$tmp" /usr/local/sbin/devopsy-server
-  rm -f "$tmp"
-}
-
-# An SSH key for CI to log in as the deploy user and run deployments. The
-# private key is printed when it is created, or when this step is named
-# explicitly (`devopsy-server ci-key`). It stays on the server so it can be
-# shown again; anyone with root here has the deploy user anyway.
-step_ci_key() {
-  local home key line host_key created=0
-  id "$DEVOPSY_USER" >/dev/null 2>&1 || die "ci-key: $DEVOPSY_USER does not exist, run the user step"
-  home=$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)
-  key=$home/.ssh/devopsy_ci_ed25519
-  install -d -m 700 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$home/.ssh"
-
-  if [ ! -f "$key" ]; then
-    log "ci-key: creating $key"
-    as_user ssh-keygen -q -t ed25519 -N '' -C "devopsy-ci@$(hostname)" -f "$key"
-    created=1
+  # Earlier versions installed this script as a command.
+  if [ -e /usr/local/sbin/devopsy-server ]; then
+    rm -f /usr/local/sbin/devopsy-server
+    log "cli: removed /usr/local/sbin/devopsy-server: rerun setup.sh instead"
   fi
-
-  # `restrict` turns off port, agent and X11 forwarding and the pty; commands
-  # still run, which is all CI needs. `devopsy --clone` across servers adds
-  # back two things: CI's agent forwarded to the parent's server, so it can
-  # reach the child, and port forwarding, since the parent reaches its rsync
-  # daemon through a reverse forward on the child (the same key, through the
-  # agent). The lines earlier runs wrote (`restrict`, then
-  # `restrict,agent-forwarding`) are upgraded in place, one line however
-  # many; a line someone edited by hand (other options) is left alone, and
-  # then no line is added: sshd takes the first match. The file is
-  # rebuilt through write_file: written whole only when it changes, never
-  # truncated in place, and a last line without a newline stays a line.
-  local auth=$home/.ssh/authorized_keys pub line
-  pub=$(cat "$key.pub")
-  line="restrict,agent-forwarding,port-forwarding $pub"
-  if {
-    found=0
-    [ ! -f "$auth" ] || while IFS= read -r l || [ -n "$l" ]; do
-      case $l in
-        "$line" | "restrict $pub" | "restrict,agent-forwarding $pub")
-          [ "$found" = 0 ] || continue
-          found=1
-          printf '%s\n' "$line"
-          ;;
-        *" $pub") found=1; printf '%s\n' "$l" ;;
-        *) printf '%s\n' "$l" ;;
-      esac
-    done <"$auth"
-    [ "$found" = 1 ] || printf '%s\n' "$line"
-  } | write_file "$auth" 600; then
-    chown "$DEVOPSY_USER:$DEVOPSY_USER" "$auth"
-    log "ci-key: authorized for $DEVOPSY_USER"
-  fi
-
-  if [ "$created" = 0 ] && [ "$EXPLICIT_STEPS" = 0 ]; then
-    log "ci-key: exists. Run 'devopsy-server ci-key' to print it."
-    return
-  fi
-
-  cat <<EOF
-
-CI deploy key for $DEVOPSY_USER@$(hostname). In GitLab, add it under
-Settings > CI/CD > Variables as a protected variable of type File, for
-example DEVOPSY_SSH_KEY. GitLab cannot mask multi-line values, so never
-echo it in a job.
-
-$(cat "$key")
-
-Host key fingerprints, to check SSH_KNOWN_HOSTS in CI. From your machine,
-'ssh-keyscan <this-server>' must print keys with these fingerprints:
-
-EOF
-  for host_key in /etc/ssh/ssh_host_*_key.pub; do
-    if [ -f "$host_key" ]; then ssh-keygen -lf "$host_key"; fi
-  done
-  echo
-}
-
-# When run as the installed devopsy-server, replace it with the latest version
-# first and run that instead, so a stale copy never runs old steps. Piped runs
-# from curl are already current. DEVOPSY_NO_SELF_UPDATE=1 skips it.
-self_update() {
-  local installed=/usr/local/sbin/devopsy-server tmp
-  [ "$(readlink -f "$0" 2>/dev/null)" = "$installed" ] || return 0
-  [ "${DEVOPSY_NO_SELF_UPDATE:-0}" != 1 ] || return 0
-  [ -z "${DEVOPSY_SELF_UPDATED:-}" ] || return 0
-
-  tmp=$(mktemp)
-  if ! curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-server/$DEVOPSY_SERVER_VERSION/setup.sh" -o "$tmp" \
-    || ! head -n 1 "$tmp" | grep -q '^#!/usr/bin/env bash'; then
-    rm -f "$tmp"
-    warn "self-update: could not download devopsy-server ($DEVOPSY_SERVER_VERSION), running this copy"
-    return 0
-  fi
-  if cmp -s "$tmp" "$installed"; then
-    rm -f "$tmp"
-    return 0
-  fi
-  # install writes a new file, so this running copy is not modified under bash.
-  install -m 755 "$tmp" "$installed"
-  rm -f "$tmp"
-  log "self-update: updated devopsy-server ($DEVOPSY_SERVER_VERSION), restarting"
-  DEVOPSY_SELF_UPDATED=1 exec "$installed" "$@"
 }
 
 main() {
-  local steps=("$@") step s known
+  local step
+  case ${1:-} in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    '') ;;
+    *) die "'$1': setup.sh takes no arguments but --help, settings are variables" ;;
+  esac
   preflight
   load_settings
-  self_update "$@"
-  EXPLICIT_STEPS=1
-  if [ ${#steps[@]} -eq 0 ]; then
-    steps=("${STEPS[@]}")
-    EXPLICIT_STEPS=0
-  fi
-  for step in "${steps[@]}"; do
-    known=0
-    for s in "${STEPS[@]}"; do [ "$s" = "$step" ] && known=1; done
-    [ "$known" = 1 ] || die "unknown step '$step'. Steps: ${STEPS[*]}"
-  done
   # Saved before running, so a failed run still remembers its settings.
   validate_settings
   save_settings
-  for step in "${steps[@]}"; do
-    "step_${step//-/_}"
+  for step in "${STEPS[@]}"; do
+    "step_$step"
   done
-  log "done: ${steps[*]}"
+  log "done: ${STEPS[*]}"
 }
 
 main "$@"

@@ -7,8 +7,9 @@ and the
 released onto it with devopsy, from your machine or CI, starting with
 [Traefik](https://github.com/hanoii/devopsy-template-traefik).
 
-It is one bash script, `setup.sh`. Every step is safe to rerun, so the same
-command sets up a new server and brings an old one up to date.
+It is one bash script, `setup.sh`, and only a setup script: no command is
+left on the server. Every step is safe to rerun, so the same command sets
+up a new server and brings an old one up to date.
 
 ## Usage
 
@@ -21,17 +22,21 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh
 Then release Traefik onto it from a devopsy-template-traefik checkout (its README,
 "Setup"), and your projects after it.
 
-The script installs itself as `devopsy-server`, which updates itself to the
-latest version before each run (`DEVOPSY_NO_SELF_UPDATE=1` skips that).
-Afterwards, rerun it or only some steps with:
+Settings are environment variables, all optional, and `--help` lists them
+with what this server has saved:
 
 ```sh
-devopsy-server              # everything
-devopsy-server docker cli   # only these steps
+curl -fsSL .../setup.sh | DEVOPSY_SWAP=2G DEVOPSY_ROOT=/srv bash
+curl -fsSL .../setup.sh | bash -s -- --help
 ```
 
-Settings are saved to `/etc/devopsy/server.env`. Later runs reuse them,
-and environment variables override them.
+They are saved to `/etc/devopsy/server.env`: a rerun without them reuses
+them, and a variable set again replaces its saved value (set empty, like
+`DEVOPSY_SWAP=`, it goes back to its default).
+
+Rerun the same command at any time. It runs every step, changes only what
+differs, and upgrades what it installed: the Debian packages it names,
+Docker and devopsy. It takes no other arguments.
 
 ## Steps
 
@@ -42,8 +47,7 @@ and environment variables override them.
 | `docker`   | Docker Engine and the Compose plugin from Docker's apt repository. Rotated logs, `live-restore` and /24 address pools for networks. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
-| `cli`      | Installs `devopsy`, when missing, in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`. Installs or updates this script as `devopsy-server` in `/usr/local/sbin`. |
-| `ci-key`   | Creates an SSH key that lets CI log in as the deploy user, and prints it. See below. |
+| `cli`      | Installs `devopsy` in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`; on a rerun, upgrades it to the latest release. |
 
 ## Settings
 
@@ -54,7 +58,6 @@ and environment variables override them.
 | `DEVOPSY_APT_PACKAGES`     |         | Extra Debian packages to install, space separated, like `htop ncdu`. Removing one from the list does not uninstall it. |
 | `DEVOPSY_SWAP`             |         | Swap file size, like `2G`. |
 | `DEVOPSY_AUTO_REBOOT_TIME` |         | Reboot after upgrades that need it, at this time, like `04:00`. |
-| `DEVOPSY_SERVER_VERSION`   | `main`  | devopsy-server branch or tag installed as `devopsy-server`. |
 | `DEVOPSY_ROOT`             |         | Where releases live, like `/srv` on a block volume; default the deploy user's home. Written as `releases: root` in the deploy user's `~/.config/devopsy/config.yaml` (devopsy-cli's README, "Release settings of a server"); a file there that devopsy-server did not write is left alone. |
 | `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13. Not saved. |
 
@@ -64,74 +67,22 @@ its README.
 
 ## Deploying from CI
 
-The `ci-key` step creates `~devopsy/.ssh/devopsy_ci_ed25519` and authorizes
-it for the deploy user, restricted to commands plus the agent and port
-forwarding `devopsy --clone` needs (below). It prints the
-private key and the server's host key fingerprints the first time. Print
-them again with:
+Nothing here makes keys. From your machine, `devopsy --ssh-keys generate`
+makes a pair and `devopsy @<target> --ssh-keys add ~/.ssh/devopsy-ci.pub
+--restricted` authorizes its public half for the deploy user, over SSH and
+without root; `--ssh-keys` lists and removes keys, for rotation
+(devopsy-cli's README, "Keys on a server"). The private key is never on the
+server.
+
+For CI's known hosts file, run `ssh-keyscan <server>` from your machine
+and check its fingerprints against the server's own:
 
 ```sh
-devopsy-server ci-key
-```
-
-The same from your machine, with the private key never on the server:
-`devopsy --ssh-keys generate` makes the pair locally and `devopsy @<target>
---ssh-keys add ~/.ssh/devopsy-ci.pub --restricted` authorizes its public
-half over SSH (devopsy-cli's README, "Keys on a server"); `--ssh-keys`
-lists and removes keys, for rotation.
-
-In GitLab, under Settings > CI/CD > Variables, add:
-
-- `DEVOPSY_SSH_KEY`: the private key, type File, protected.
-- `DEVOPSY_SSH_KNOWN_HOSTS`: the output of `ssh-keyscan <server>`, type File.
-  Check its fingerprints against the ones the script printed.
-
-A job can then release the project with devopsy, which takes SSH options
-from `DEVOPSY_SSH_COMMAND`:
-
-```yaml
-deploy:
-  image: alpine:latest
-  script:
-    - apk add --no-cache openssh-client curl
-    - curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh | sh
-    - chmod 600 "$DEVOPSY_SSH_KEY"
-    - DEVOPSY_SSH_COMMAND="ssh -i $DEVOPSY_SSH_KEY -o UserKnownHostsFile=$DEVOPSY_SSH_KNOWN_HOSTS"
-        devopsy @prod --release
-```
-
-GitLab cannot mask a multi-line key, so never print the variable in a job.
-
-A clone across servers (`devopsy @pr-12 --release` with its parent on
-another server) needs an agent instead of `-i`: the parent's server
-reaches the child's with the keys CI forwards, so the agent holds both
-servers' CI keys, each server having generated its own:
-
-```sh
-eval "$(ssh-agent)"
-ssh-add "$DEVOPSY_SSH_KEY" "$DEVOPSY_SSH_KEY_CHILD"
-DEVOPSY_SSH_COMMAND="ssh -o UserKnownHostsFile=$DEVOPSY_SSH_KNOWN_HOSTS" devopsy @pr-12 --release
-```
-
-The parent's server can use every key in that agent for the session, so
-load only those two, never one for a server the parent should not reach
-(a staging server cloning to pull-request environments gets the agent,
-and must not hold production's key). OpenSSH 8.9 or later can also
-constrain each key to its path (`-h`, hosts as in the known hosts file):
-
-```sh
-ssh-add -H "$DEVOPSY_SSH_KNOWN_HOSTS" -h vm1 "$DEVOPSY_SSH_KEY"
-ssh-add -H "$DEVOPSY_SSH_KNOWN_HOSTS" -h vm2 -h 'vm1>vm2' "$DEVOPSY_SSH_KEY_CHILD"
+for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
 ```
 
 ## Things to know
 
-- **The CI key allows agent and port forwarding.** It stays restricted
-  (no pty, no X11), but `authorized_keys` carries
-  `restrict,agent-forwarding,port-forwarding`, because `devopsy --clone`
-  across servers forwards CI's agent to the parent's server, which then
-  reaches the child with that key and a reverse forward to its rsync
-  daemon. A line from an earlier run is upgraded in place on the next run.
 - **A block volume for releases.** Releases and their data live in the
   deploy user's home, or `DEVOPSY_ROOT`. Providers mount volumes elsewhere
   (DigitalOcean: `/mnt/<volume>`); mount it where you want releases, like
@@ -143,8 +94,9 @@ ssh-add -H "$DEVOPSY_SSH_KNOWN_HOSTS" -h vm2 -h 'vm1>vm2' "$DEVOPSY_SSH_KEY_CHIL
   allows root access through Docker. Treat its keys accordingly.
 - **The deploy user owns `devopsy`.** `ssh devopsy@<server> devopsy
   --upgrade` upgrades it, without root, and `--upgrade vX.Y.Z` installs
-  that release. Setup installs the latest release once and never upgrades
-  it. `/usr/local/bin/devopsy` is a link
+  that release. A rerun of setup upgrades it to the latest too, so pin a
+  version by not rerunning, or `--upgrade vX.Y.Z` afterwards.
+  `/usr/local/bin/devopsy` is a link
   to it, so whoever runs `devopsy` there, root included, runs a file the
   deploy user can replace: nothing it could not do already.
 - **No host firewall.** Use your provider's firewall and allow only SSH, 80
@@ -164,8 +116,13 @@ ssh-add -H "$DEVOPSY_SSH_KNOWN_HOSTS" -h vm2 -h 'vm1>vm2' "$DEVOPSY_SSH_KEY_CHIL
   `up`). Where the server must reach other hosts in those ranges (a
   corporate network on `172.16.0.0/12`), set `default-address-pools` in
   `/etc/docker/daemon.json` to a range nobody uses.
-- Only Debian security updates are automatic. Upgrade Docker by hand with
-  `apt upgrade`. `live-restore` keeps containers running while it restarts.
+- Only Debian security updates are automatic. Docker is upgraded by a
+  rerun of setup, or by hand with `apt upgrade`. `live-restore` keeps
+  containers running while it restarts.
+- **Servers set up by earlier versions.** A rerun removes the
+  `devopsy-server` command they installed. A CI key the old `ci-key` step
+  made (`~devopsy/.ssh/devopsy_ci_ed25519`) stays, and stays authorized:
+  list and remove keys with `devopsy @<target> --ssh-keys`.
 
 ## License
 
