@@ -150,7 +150,7 @@ preflight() {
 step_base() {
   log "base packages"
   apt-get update -q >/dev/null
-  apt_install ca-certificates curl git jq openssh-client unattended-upgrades sudo
+  apt_install ca-certificates curl git jq openssh-client openssl unattended-upgrades sudo
 
   # Extra packages, space separated (checked in validate_settings).
   if [ -n "$DEVOPSY_APT_PACKAGES" ]; then
