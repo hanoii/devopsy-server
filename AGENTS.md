@@ -49,6 +49,9 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
 
 - Settings are validated, then saved, before any step runs: a failed run
   remembers them, and a typo never sticks.
+- devopsy-cli's end-to-end servers copy this host setup (`e2e/Dockerfile`,
+  `e2e/daemon.json`: Docker with Buildx, the /24 address pools): a change
+  to the `docker` step's packages or `daemon.json` goes there too.
 - The `cli` step removes `/usr/local/sbin/devopsy-server`, the copy earlier
   versions installed. Their CI key and its `authorized_keys` line are left
   alone.
@@ -77,7 +80,7 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   with `DEVOPSY_ROOT=/srv`, before running setup, and make Docker wait for it
   (`RequiresMountsFor=/srv` in a `docker.service.d` drop-in): otherwise
   containers starting before the mount write their bind mounts to the root
-  disk, hidden under the volume. Done by hand on builder1; not automated
+  disk, hidden under the volume. Done by hand so far; not automated
   (see ROADMAP.md).
 
 ## Checks
