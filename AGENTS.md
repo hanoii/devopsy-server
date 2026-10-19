@@ -7,6 +7,11 @@ settings table and "Things to know".
 
 ## Rules
 
+- **Every change is tested before it lands:** shellcheck clean, and
+  `setup.sh` run twice on a fresh Debian 13 machine (Checks): the
+  second run changes nothing. A step devopsy-cli's e2e servers copy
+  (`e2e/Dockerfile`, `e2e/daemon.json`) changes there too, so its e2e
+  suite runs on it. Why: a setup bug surfaces only on the next server.
 - **Every step is idempotent:** running the script twice in a row
   changes nothing the second time and restarts nothing. Where: each
   `step_*` function.
