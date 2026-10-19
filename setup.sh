@@ -346,12 +346,6 @@ step_cli() {
     mv -T "$link.new" "$link"
     log "cli: linked $link to $dir/devopsy"
   fi
-
-  # Earlier versions installed this script as a command.
-  if [ -e /usr/local/sbin/devopsy-server ]; then
-    rm -f /usr/local/sbin/devopsy-server
-    log "cli: removed /usr/local/sbin/devopsy-server: rerun setup.sh instead"
-  fi
 }
 
 main() {
