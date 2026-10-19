@@ -59,6 +59,7 @@ Docker and devopsy. It takes no other arguments.
 | `DEVOPSY_APT_PACKAGES`     |         | Extra Debian packages to install, space separated, like `htop ncdu`. Removing one from the list does not uninstall it. |
 | `DEVOPSY_SWAP`             |         | Swap file size, like `2G`. |
 | `DEVOPSY_AUTO_REBOOT_TIME` |         | Reboot after upgrades that need it, at this time, like `04:00`. |
+| `DEVOPSY_ADDRESS_POOLS`    | `172.16.0.0/12 192.168.0.0/16` | Ranges Docker cuts into /24 networks for projects, space separated, each /24 or larger. Name others where the server must reach hosts in these (a corporate network). |
 | `DEVOPSY_ROOT`             |         | Where releases live, like `/srv` on a block volume; default the deploy user's home. Written as `releases: root` in the deploy user's `~/.config/devopsy/config.yaml` (devopsy-cli's README, "Release settings"); a file there that devopsy-server did not write is left alone. |
 | `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13. Not saved. |
 
@@ -115,9 +116,7 @@ for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
   each. Networks that already exist keep their size until recreated
   (`devopsy down`, then `up`). Where the server must reach other hosts in
   those ranges (a corporate network on `172.16.0.0/12`), set
-  `default-address-pools` in `/etc/docker/daemon.json` to a range nobody
-  uses; a rerun of setup writes the file back, and there is no setting for
-  it yet.
+  `DEVOPSY_ADDRESS_POOLS` to ranges nobody uses.
 - Only Debian security updates are automatic. Docker is upgraded by a
   rerun of setup, or by hand with `apt upgrade`. `live-restore` keeps
   containers running while it restarts.
