@@ -120,10 +120,6 @@ for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
 - Only Debian security updates are automatic. Docker is upgraded by a
   rerun of setup, or by hand with `apt upgrade`. `live-restore` keeps
   containers running while it restarts.
-- **Servers set up by earlier versions.** A rerun removes the
-  `devopsy-server` command they installed. A CI key the old `ci-key` step
-  made (`~devopsy/.ssh/devopsy_ci_ed25519`) stays, and stays authorized:
-  list and remove keys with `devopsy @<target> --ssh-keys`.
 
 ## License
 

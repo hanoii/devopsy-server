@@ -59,9 +59,6 @@ settings table and "Things to know".
 - **No version setting:** a rerun runs `devopsy --upgrade` as that user,
   the one way to upgrade, so a pinned version would last only until the
   next rerun.
-- **The `cli` step removes `/usr/local/sbin/devopsy-server`,** the copy
-  earlier versions installed. Their CI key and its `authorized_keys`
-  line are left alone.
 - **devopsy-cli's end-to-end servers copy this host setup**
   (`e2e/Dockerfile`, `e2e/daemon.json` there: Docker with Buildx, the
   /24 address pools): a change to the `docker` step's packages or
