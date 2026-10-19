@@ -18,7 +18,7 @@ CONFIG_FILE=/etc/devopsy/server.env
 # Settings saved to $CONFIG_FILE. A new one also goes in usage and README.md.
 SETTINGS=(
   DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SWAP DEVOPSY_AUTO_REBOOT_TIME
-  DEVOPSY_APT_PACKAGES DEVOPSY_ROOT
+  DEVOPSY_APT_PACKAGES DEVOPSY_ROOT DEVOPSY_ADDRESS_POOLS
 )
 
 usage() {
@@ -43,6 +43,9 @@ Settings are environment variables, all optional:
                             time, like 04:00. Default: never.
   DEVOPSY_APT_PACKAGES      Extra Debian packages, space separated, like
                             "htop ncdu".
+  DEVOPSY_ADDRESS_POOLS     Ranges Docker cuts into /24 networks, space
+                            separated. Default: "172.16.0.0/12
+                            192.168.0.0/16".
   DEVOPSY_SUDO              1 gives the deploy user passwordless sudo.
                             Default: 0.
   DEVOPSY_FORCE             1 runs on something other than Debian 13.
@@ -87,6 +90,7 @@ load_settings() {
   DEVOPSY_AUTO_REBOOT_TIME=${DEVOPSY_AUTO_REBOOT_TIME:-}
   DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
   DEVOPSY_ROOT=${DEVOPSY_ROOT:-}
+  DEVOPSY_ADDRESS_POOLS=${DEVOPSY_ADDRESS_POOLS:-172.16.0.0/12 192.168.0.0/16}
 }
 
 # Rejects bad values before they are saved, so a typo does not stick.
@@ -100,6 +104,11 @@ validate_settings() {
     [[ $DEVOPSY_ROOT =~ ^/[A-Za-z0-9._/-]+$ ]] && [ "$DEVOPSY_ROOT" != / ] \
       || die "DEVOPSY_ROOT must be an absolute directory, not /: $DEVOPSY_ROOT"
   fi
+  local pool cidr_re='^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|1[0-9]|2[0-4])$'
+  [ -n "$DEVOPSY_ADDRESS_POOLS" ] || die "DEVOPSY_ADDRESS_POOLS needs at least one range"
+  for pool in $DEVOPSY_ADDRESS_POOLS; do
+    [[ $pool =~ $cidr_re ]] || die "'$pool' in DEVOPSY_ADDRESS_POOLS is not a range of /24 or larger, like 10.200.0.0/16"
+  done
 }
 
 save_settings() {
@@ -207,8 +216,14 @@ EOF
   # Docker upgrade does not stop running containers. Address pools of /24
   # networks: Docker's default cuts nearly the same ranges into /16 and /20,
   # about 30 networks, and every project environment takes at least one.
-  # Docker reads the first base as 172.16.0.0/12.
-  if write_file /etc/docker/daemon.json <<'EOF'; then
+  # The ranges are a setting: a server that must reach a corporate network
+  # in them names others, and a rerun keeps them.
+  local pool pools=""
+  for pool in $DEVOPSY_ADDRESS_POOLS; do
+    pools+="${pools:+,}
+    {\"base\": \"$pool\", \"size\": 24}"
+  done
+  if write_file /etc/docker/daemon.json <<EOF; then
 {
   "log-driver": "local",
   "log-opts": {
@@ -216,9 +231,7 @@ EOF
     "max-file": "5"
   },
   "live-restore": true,
-  "default-address-pools": [
-    {"base": "172.16.0.0/12", "size": 24},
-    {"base": "192.168.0.0/16", "size": 24}
+  "default-address-pools": [$pools
   ]
 }
 EOF
