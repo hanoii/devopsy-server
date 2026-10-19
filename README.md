@@ -111,9 +111,9 @@ for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
 - **Thousands of Docker networks, not 30.** Docker's default address pools
   cut `172.17.0.0` to `172.31.255.255` into /16 networks and
   `192.168.0.0/16` into /20 ones: about 30 per host, and every project
-  environment takes at least one. Here `172.16.0.0/12` (the same, plus
-  `172.16.x`) and `192.168.0.0/16` are cut into /24 networks, 254 addresses
-  each. Networks that already exist keep their size until recreated
+  environment takes at least one. By default, `172.16.0.0/12` (the same,
+  plus `172.16.x`) and `192.168.0.0/16` are cut into /24 networks
+  (`DEVOPSY_ADDRESS_POOLS`), 254 addresses each. Networks that already exist keep their size until recreated
   (`devopsy down`, then `up`). Where the server must reach other hosts in
   those ranges (a corporate network on `172.16.0.0/12`), set
   `DEVOPSY_ADDRESS_POOLS` to ranges nobody uses.
