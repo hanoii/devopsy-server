@@ -44,9 +44,6 @@ table and "Things to know".
 
 ## Design decisions and gotchas
 
-The workspace README (`../devopsy/README.md` locally) describes how the repos
-fit together, and `../devopsy/ROADMAP.md` the open ideas.
-
 - Settings are validated, then saved, before any step runs: a failed run
   remembers them, and a typo never sticks.
 - devopsy-cli's end-to-end servers copy this host setup (`e2e/Dockerfile`,
@@ -80,8 +77,7 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   with `DEVOPSY_ROOT=/srv`, before running setup, and make Docker wait for it
   (`RequiresMountsFor=/srv` in a `docker.service.d` drop-in): otherwise
   containers starting before the mount write their bind mounts to the root
-  disk, hidden under the volume. Done by hand so far; not automated
-  (see ROADMAP.md).
+  disk, hidden under the volume. Done by hand so far; not automated.
 
 ## Checks
 
