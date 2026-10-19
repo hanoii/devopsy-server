@@ -19,8 +19,9 @@ As root on the server:
 curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash
 ```
 
-Then release Traefik onto it from a devopsy-template-traefik checkout (its README,
-"Setup"), and your projects after it.
+Then release Traefik onto it from a devopsy-template-traefik checkout
+(`devopsy @<server>:prod setup`, its README's "Setup"), and your projects
+after it.
 
 Settings are environment variables, all optional, and `--help` lists them
 with what this server has saved:
@@ -42,9 +43,9 @@ Docker and devopsy. It takes no other arguments.
 
 | Step       | What it does |
 | ---------- | ------------ |
-| `base`     | Installs curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, plus `DEVOPSY_APT_PACKAGES`. |
+| `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, plus `DEVOPSY_APT_PACKAGES`. |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
-| `docker`   | Docker Engine and the Compose plugin from Docker's apt repository. Rotated logs, `live-restore` and /24 address pools for networks. |
+| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository. Rotated logs, `live-restore` and /24 address pools for networks. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
 | `cli`      | Installs `devopsy` in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`; on a rerun, upgrades it to the latest release. |
@@ -58,12 +59,12 @@ Docker and devopsy. It takes no other arguments.
 | `DEVOPSY_APT_PACKAGES`     |         | Extra Debian packages to install, space separated, like `htop ncdu`. Removing one from the list does not uninstall it. |
 | `DEVOPSY_SWAP`             |         | Swap file size, like `2G`. |
 | `DEVOPSY_AUTO_REBOOT_TIME` |         | Reboot after upgrades that need it, at this time, like `04:00`. |
-| `DEVOPSY_ROOT`             |         | Where releases live, like `/srv` on a block volume; default the deploy user's home. Written as `releases: root` in the deploy user's `~/.config/devopsy/config.yaml` (devopsy-cli's README, "Release settings of a server"); a file there that devopsy-server did not write is left alone. |
+| `DEVOPSY_ROOT`             |         | Where releases live, like `/srv` on a block volume; default the deploy user's home. Written as `releases: root` in the deploy user's `~/.config/devopsy/config.yaml` (devopsy-cli's README, "Release settings"); a file there that devopsy-server did not write is left alone. |
 | `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13. Not saved. |
 
 Traefik's settings (ACME email, resolvers, acme-dns, the wildcard domain,
-Cloudflare) are devopsy-template-traefik's, in its `shared/.env` on the server; see
-its README.
+Cloudflare) are devopsy-template-traefik's, in its `shared/.env` on the
+server; see its README.
 
 ## Deploying from CI
 
@@ -89,16 +90,16 @@ for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
   `/srv`, set `DEVOPSY_ROOT=/srv`, and add `RequiresMountsFor=/srv` to a
   `docker.service.d` drop-in so containers never start before it. The home
   directory, with `.ssh`, stays off the volume.
-
 - **The deploy user is effectively root.** Membership in the `docker` group
   allows root access through Docker. Treat its keys accordingly.
-- **The deploy user owns `devopsy`.** `ssh devopsy@<server> devopsy
-  --upgrade` upgrades it, without root, and `--upgrade vX.Y.Z` installs
-  that release. A rerun of setup upgrades it to the latest too, so pin a
-  version by not rerunning, or `--upgrade vX.Y.Z` afterwards.
-  `/usr/local/bin/devopsy` is a link
-  to it, so whoever runs `devopsy` there, root included, runs a file the
-  deploy user can replace: nothing it could not do already.
+- **The deploy user owns `devopsy`.** `devopsy @<server> --upgrade` from
+  your machine upgrades it, without root (`--upgrade vX.Y.Z` installs that
+  release), and so does a rerun of setup, to the latest: pin a version by
+  not rerunning, or `--upgrade vX.Y.Z` afterwards. Commands refuse a
+  server whose devopsy is too old for yours, and say to upgrade it.
+  `/usr/local/bin/devopsy` is a link to it, so whoever runs `devopsy`
+  there, root included, runs a file the deploy user can replace: nothing
+  it could not do already.
 - **No host firewall.** Use your provider's firewall and allow only SSH, 80
   and 443. Docker would bypass a host firewall like ufw anyway: a port
   published by a container is open whatever ufw says.
@@ -111,11 +112,12 @@ for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
   `192.168.0.0/16` into /20 ones: about 30 per host, and every project
   environment takes at least one. Here `172.16.0.0/12` (the same, plus
   `172.16.x`) and `192.168.0.0/16` are cut into /24 networks, 254 addresses
-  each. Networks
-  that already exist keep their size until recreated (`devopsy down`, then
-  `up`). Where the server must reach other hosts in those ranges (a
-  corporate network on `172.16.0.0/12`), set `default-address-pools` in
-  `/etc/docker/daemon.json` to a range nobody uses.
+  each. Networks that already exist keep their size until recreated
+  (`devopsy down`, then `up`). Where the server must reach other hosts in
+  those ranges (a corporate network on `172.16.0.0/12`), set
+  `default-address-pools` in `/etc/docker/daemon.json` to a range nobody
+  uses; a rerun of setup writes the file back, and there is no setting for
+  it yet.
 - Only Debian security updates are automatic. Docker is upgraded by a
   rerun of setup, or by hand with `apt upgrade`. `live-restore` keeps
   containers running while it restarts.
