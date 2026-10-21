@@ -75,6 +75,7 @@ adopts the result.
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ca-certificates curl git jq openssh-client openssl unattended-upgrades sudo
+
 ```
 
 ### swap
@@ -98,6 +99,7 @@ swapon /swapfile
 echo '/swapfile none swap sw 0 0' >> /etc/fstab
 echo 'vm.swappiness = 10' > /etc/sysctl.d/90-devopsy-swap.conf
 sysctl -p /etc/sysctl.d/90-devopsy-swap.conf
+
 ```
 
 ### docker
@@ -134,6 +136,7 @@ cat > /etc/docker/daemon.json <<'EOF'
 EOF
 systemctl restart docker
 systemctl enable docker
+
 ```
 
 Rotated logs keep containers from filling the disk, and `live-restore`
@@ -147,6 +150,7 @@ useradd --create-home --shell /bin/bash devopsy
 usermod -aG docker devopsy
 install -d -m 700 -o devopsy -g devopsy /home/devopsy/.ssh
 install -m 600 -o devopsy -g devopsy /root/.ssh/authorized_keys /home/devopsy/.ssh/
+
 ```
 
 Optional, passwordless sudo (`DEVOPSY_SUDO=1`). The `docker` group is
@@ -155,6 +159,7 @@ root-equivalent already; this only saves going through root's login:
 ```sh
 echo 'devopsy ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-devopsy
 chmod 440 /etc/sudoers.d/90-devopsy
+
 ```
 
 Optional, releases elsewhere than the home (`DEVOPSY_ROOT`), like a block
@@ -165,6 +170,7 @@ install -d -o devopsy -g devopsy /srv
 install -d -m 755 -o devopsy -g devopsy /home/devopsy/.config /home/devopsy/.config/devopsy
 printf 'releases:\n  root: /srv\n' > /home/devopsy/.config/devopsy/config.yaml
 chown devopsy:devopsy /home/devopsy/.config/devopsy/config.yaml
+
 ```
 
 `setup.sh` leaves this file alone afterwards, since it did not write it.
@@ -177,6 +183,7 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
 systemctl enable --now unattended-upgrades
+
 ```
 
 Optional, a reboot when an upgrade needs one (`DEVOPSY_AUTO_REBOOT_TIME`),
@@ -188,6 +195,7 @@ cat > /etc/apt/apt.conf.d/52devopsy-reboot <<'EOF'
 Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "04:00";
 EOF
+
 ```
 
 ### cli
@@ -197,6 +205,7 @@ install -d -m 755 -o devopsy -g devopsy /usr/local/lib/devopsy
 cd / && curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh \
   | runuser -u devopsy -- env DEVOPSY_INSTALL_DIR=/usr/local/lib/devopsy sh
 ln -s /usr/local/lib/devopsy/devopsy /usr/local/bin/devopsy
+
 ```
 
 Check: `runuser -u devopsy -- docker ps` and `runuser -u devopsy --
