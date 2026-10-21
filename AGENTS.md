@@ -3,7 +3,8 @@
 devopsy-server prepares a Debian 13 host for devopsy. It is a single bash
 script, `setup.sh`, run as root, often piped from curl. Read `README.md`
 for the user-facing behavior and keep it in sync: the steps table, the
-settings table and "Things to know".
+settings table, "Without the script" (each step by hand: a change to a
+`step_*` function changes its commands there) and "Things to know".
 
 ## Rules
 
