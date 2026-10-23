@@ -64,6 +64,16 @@ settings table, "Without the script" (each step by hand: a change to a
   (`e2e/Dockerfile`, `e2e/daemon.json` there: Docker with Buildx, the
   /24 address pools): a change to the `docker` step's packages or
   `daemon.json` goes there too.
+- **Docker looks for AppArmor once per daemon** (containerd's
+  `HostSupports`, behind a `sync.Once`: securityfs, the kernel's
+  `enabled` flag, `/sbin/apparmor_parser`), so installing `apparmor`
+  under a running daemon changes nothing until it restarts, and a rerun
+  restarts Docker only when `daemon.json` changes. `docker_apparmor`
+  restarts it when the host passes those checks and `docker info` lacks
+  `name=apparmor`: once, since the restarted daemon reports it. Running
+  containers keep their profile (none) through the restart
+  (`live-restore`) until they next start. Not testable on OrbStack,
+  whose kernel has no AppArmor: there the step only says so.
 - **Provider block volumes are mounted by hand, before setup:**
   DigitalOcean mounts an attached volume on `/mnt/<volume>` with its
   own systemd mount unit. Mount it where releases should live, like
