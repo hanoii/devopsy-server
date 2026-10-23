@@ -40,7 +40,7 @@ devopsy). It leaves no command on the server.
 | ---------- | ------------ |
 | `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, plus `DEVOPSY_APT_PACKAGES`. |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
-| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker's default profile confines every container. Rotated logs, `live-restore` and /24 address pools. |
+| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor (Debian's does; a rerun restarts a daemon that started without it). Rotated logs, `live-restore` and /24 address pools. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
 | `cli`      | Installs `devopsy` in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`; a rerun upgrades it. |
@@ -250,6 +250,16 @@ for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
   recreated (`devopsy down`, then `up`). Where the server must reach hosts
   in these ranges (a corporate network on `172.16.0.0/12`), set
   `DEVOPSY_ADDRESS_POOLS` to ranges nobody uses.
+- **AppArmor.** Docker applies its `docker-default` profile only where
+  the kernel has AppArmor and `apparmor` is installed, and checks once,
+  when the daemon starts. On a server set up before the script installed
+  `apparmor`, a rerun restarts Docker for it (said in its output), and
+  containers already running stay unconfined until they next start:
+  restarted, or recreated by a release that changes them. `docker info`
+  lists `name=apparmor` under its security options once it applies, and
+  `docker inspect -f '{{.AppArmorProfile}}' <container>` shows the profile.
+  Kernels without AppArmor (some cloud images, OrbStack) run containers
+  without it.
 - **Only Debian security updates are automatic.** Docker is upgraded by a
   rerun of setup or `apt upgrade`; `live-restore` keeps containers running
   meanwhile.
