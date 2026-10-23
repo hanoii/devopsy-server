@@ -40,7 +40,7 @@ devopsy). It leaves no command on the server.
 | ---------- | ------------ |
 | `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, plus `DEVOPSY_APT_PACKAGES`. |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
-| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository. Rotated logs, `live-restore` and /24 address pools. |
+| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker's default profile confines every container. Rotated logs, `live-restore` and /24 address pools. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
 | `cli`      | Installs `devopsy` in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`; a rerun upgrades it. |
@@ -118,7 +118,7 @@ Signed-By: /etc/apt/keyrings/docker.asc
 EOF
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  apparmor docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
 cat > /etc/docker/daemon.json <<'EOF'
 {

@@ -209,8 +209,11 @@ EOF
     apt-get update -q >/dev/null
   fi
 
+  # apparmor first: Docker applies its docker-default profile to containers
+  # only when the kernel has AppArmor and the userspace package is there,
+  # which cloud images vary on and --no-install-recommends never pulls in.
   log "docker: installing"
-  apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  apt_install apparmor docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   # Rotated logs, so containers cannot fill the disk, and live-restore, so a
   # Docker upgrade does not stop running containers. Address pools of /24
