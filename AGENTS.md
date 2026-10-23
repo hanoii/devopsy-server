@@ -63,7 +63,10 @@ settings table, "Without the script" (each step by hand: a change to a
 - **devopsy-cli's end-to-end servers copy this host setup**
   (`e2e/Dockerfile`, `e2e/daemon.json` there: Docker with Buildx, the
   /24 address pools): a change to the `docker` step's packages or
-  `daemon.json` goes there too.
+  `daemon.json` goes there too. Except `apparmor`, never mirrored: those
+  servers are privileged Docker-in-Docker, and on a host with AppArmor
+  (GitHub's Ubuntu runners included) it would start confining the inner
+  containers, changing what the suite tests.
 - **Docker looks for AppArmor once per daemon** (containerd's
   `HostSupports`, behind a `sync.Once`: securityfs, the kernel's
   `enabled` flag, `/sbin/apparmor_parser`), so installing `apparmor`
