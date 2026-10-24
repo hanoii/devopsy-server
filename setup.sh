@@ -209,8 +209,12 @@ EOF
     apt-get update -q >/dev/null
   fi
 
+  # apparmor with it: Docker applies its docker-default profile to
+  # containers only when the kernel has AppArmor and apparmor_parser is
+  # there, which cloud images vary on and --no-install-recommends never
+  # pulls in. The daemon checks once, when it starts (docker_apparmor).
   log "docker: installing"
-  apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  apt_install apparmor docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   # Rotated logs, so containers cannot fill the disk, and live-restore, so a
   # Docker upgrade does not stop running containers. Address pools of /24
@@ -239,6 +243,47 @@ EOF
     systemctl restart docker
   fi
   systemctl enable --now docker >/dev/null 2>&1
+  docker_apparmor
+}
+
+# Docker (containerd's check, behind a sync.Once) looks for AppArmor once
+# per daemon, when it starts: a daemon that started before apparmor was
+# installed (a server set up before this script installed it) runs every
+# container unconfined until it restarts, which nothing else here does on
+# a rerun. So restart it when the host supports AppArmor as Docker tests
+# it and the running daemon does not report it. live-restore keeps
+# containers running meanwhile, so they get the profile only when they
+# next start, restarted or recreated. Without AppArmor in the kernel
+# (OrbStack, some cloud kernels) there is nothing to restart for.
+docker_apparmor() {
+  local enabled
+  enabled=$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null) || enabled=N
+  if [ "$enabled" != Y ] || [ ! -d /sys/kernel/security/apparmor ]; then
+    log "docker: no AppArmor in this kernel, containers run without it"
+    return 0
+  fi
+  if [ ! -x /sbin/apparmor_parser ]; then
+    warn "docker: no /sbin/apparmor_parser, containers run without AppArmor"
+    return 0
+  fi
+  case $(docker_security_options) in
+    *'"name=apparmor'*) return 0 ;;
+    '') warn "docker: 'docker info' failed, cannot tell whether containers get AppArmor" ;;
+    *)
+      log "docker: restarting so new containers get AppArmor: the daemon started before apparmor was installed; running containers get it when they next start (restarted or recreated)"
+      systemctl restart docker
+      case $(docker_security_options) in
+        *'"name=apparmor'*) ;;
+        *) warn "docker: still no AppArmor in 'docker info' after a restart: containers run without it" ;;
+      esac
+      ;;
+  esac
+}
+
+# The running daemon's security options (name=apparmor when it applies
+# AppArmor), empty when it does not answer.
+docker_security_options() {
+  docker info --format '{{json .SecurityOptions}}' 2>/dev/null || true
 }
 
 step_user() {
