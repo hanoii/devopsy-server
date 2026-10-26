@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepares a Debian 13 server for devopsy projects. Run as root:
+# Prepares a Debian 13 or Ubuntu 26.04 server for devopsy projects. Run as root:
 #
 #   curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash
 #
@@ -23,10 +23,10 @@ SETTINGS=(
 
 usage() {
   cat <<EOF
-Prepares a Debian 13 server for devopsy: Docker, the deploy user, automatic
-security upgrades and the devopsy CLI. Run it as root, again at any time: a
-rerun changes only what differs, and upgrades the packages, Docker and
-devopsy.
+Prepares a Debian 13 or Ubuntu 26.04 server for devopsy: Docker, the deploy
+user, automatic security upgrades and the devopsy CLI. Run it as root, again
+at any time: a rerun changes only what differs, and upgrades the packages,
+Docker and devopsy.
 
   curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash
 
@@ -41,15 +41,15 @@ Settings are environment variables, all optional:
                             has no swap, like 2G. Default: none.
   DEVOPSY_AUTO_REBOOT_TIME  Reboot after upgrades that need it, at this
                             time, like 04:00. Default: never.
-  DEVOPSY_APT_PACKAGES      Extra Debian packages, space separated, like
+  DEVOPSY_APT_PACKAGES      Extra apt packages, space separated, like
                             "htop ncdu".
   DEVOPSY_ADDRESS_POOLS     Ranges Docker cuts into /24 networks, space
                             separated. Default: "172.16.0.0/12
                             192.168.0.0/16".
   DEVOPSY_SUDO              1 gives the deploy user passwordless sudo.
                             Default: 0.
-  DEVOPSY_FORCE             1 runs on something other than Debian 13.
-                            Not saved.
+  DEVOPSY_FORCE             1 runs on something other than Debian 13 or
+                            Ubuntu 26.04. Not saved.
 
 They are saved to $CONFIG_FILE: a rerun without them
 reuses them, and a variable set again replaces its saved value (set empty,
@@ -143,23 +143,34 @@ as_user() {
 }
 
 apt_install() {
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends "$@" >/dev/null
+  # needrestart (Ubuntu) would restart services and report on every install:
+  # the steps restart what they change themselves.
+  DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get install -y -q --no-install-recommends "$@" >/dev/null
 }
 
 preflight() {
   [ "$(id -u)" = 0 ] || die "run as root"
   # shellcheck disable=SC1091
   . /etc/os-release
-  if [ "${ID:-}" != debian ] || [ "${VERSION_ID:-}" != 13 ]; then
-    [ "${DEVOPSY_FORCE:-0}" = 1 ] || die "expects Debian 13, found ${PRETTY_NAME:-unknown}. Set DEVOPSY_FORCE=1 to try anyway."
-    warn "not Debian 13 (${PRETTY_NAME:-unknown}), continuing because DEVOPSY_FORCE=1"
-  fi
+  case ${ID:-}:${VERSION_ID:-} in
+    debian:13 | ubuntu:26.04) ;;
+    *)
+      [ "${DEVOPSY_FORCE:-0}" = 1 ] || die "expects Debian 13 or Ubuntu 26.04, found ${PRETTY_NAME:-unknown}. Set DEVOPSY_FORCE=1 to try anyway."
+      warn "not Debian 13 or Ubuntu 26.04 (${PRETTY_NAME:-unknown}), continuing because DEVOPSY_FORCE=1"
+      ;;
+  esac
 }
 
 step_base() {
   log "base packages"
   apt-get update -q >/dev/null
   apt_install ca-certificates curl git jq openssh-client openssl unattended-upgrades sudo
+  # GNU's coreutils, which devopsy's scripts on the server expect (GNU
+  # tail, mv -T), where Ubuntu may make Rust's uutils the default.
+  # shellcheck disable=SC1091
+  if (. /etc/os-release && [ "${ID:-}" = ubuntu ]); then
+    apt_install coreutils-from-gnu
+  fi
 
   # Extra packages, space separated (checked in validate_settings).
   if [ -n "$DEVOPSY_APT_PACKAGES" ]; then
@@ -196,12 +207,12 @@ step_docker() {
   if [ ! -f /etc/apt/keyrings/docker.asc ]; then
     log "docker: adding the Docker apt repository"
     install -d -m 755 /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+    curl -fsSL "https://download.docker.com/linux/$ID/gpg" -o /etc/apt/keyrings/docker.asc
     chmod a+r /etc/apt/keyrings/docker.asc
   fi
   if write_file /etc/apt/sources.list.d/docker.sources <<EOF; then
 Types: deb
-URIs: https://download.docker.com/linux/debian
+URIs: https://download.docker.com/linux/$ID
 Suites: $VERSION_CODENAME
 Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc

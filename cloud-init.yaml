@@ -2,66 +2,68 @@
 # devopsy-server: an XFS root for a new server, as its user data
 # (README.md, "An XFS root"). Converts the image's ext4 root to XFS on
 # the first boots, so every file on the server can be copied with
-# reflinks, then leaves a plain Debian: the XFS root as partition 1, the
-# image's ext4 kept as a 2 GiB /boot (GRUB never reads XFS) and nothing
-# of devopsy's behind. Then run setup.sh as usual. Written for
-# DigitalOcean's Debian 13 image (GPT, root=PARTUUID=..., GRUB for BIOS
-# and EFI through grub-cloud-amd64).
+# reflinks, then leaves the distribution as it is: the XFS root as
+# partition 1 (where DigitalOcean's restore of a snapshot expects it),
+# GRUB reading only ext4, and nothing of devopsy's behind. Then run
+# setup.sh as usual. Written for DigitalOcean's Debian 13 and Ubuntu
+# 26.04 images (GPT, booted by BIOS through GRUB), which differ in what
+# the conversion keeps of the ext4:
+# - /boot in the root (Debian): the ext4 stays as a 2 GiB /boot, its
+#   files at its top with boot -> . (GRUB finds /boot/grub there as it
+#   always did), and the XFS takes the root's partition number and
+#   PARTUUID (the kernel's root=PARTUUID=...). GRUB's BIOS core finds
+#   /boot by partition number, which that changes, so boot 1 installs
+#   one that finds it by UUID, and the last boot reinstalls GRUB as its
+#   updates do.
+# - /boot on its own partition (Ubuntu): GRUB never reads the root. The
+#   ext4 is shrunk to its minimum to hold the copy, then goes: the XFS
+#   takes its partition number, PARTUUID and filesystem UUID (the
+#   kernel's root=UUID=...), and the space it held stays unused before
+#   the root (XFS grows only at its end).
 #
-# Boot 1 (cloud-init): the image's initramfs (growroot) has grown the
-# root over the whole disk already. Install a GRUB core that finds the
-# ext4 by its UUID, valid through every phase below (the image's finds
-# it by partition number, which phase 4 changes), put a one-time
-# conversion into the initramfs and reboot.
+# Boot 1 (cloud-init): the root fills the disk already (growroot or
+# cloud-init's growpart). Note the layout, put a one-time conversion into
+# the initramfs (initramfs-tools on Debian, dracut on Ubuntu, both
+# through update-initramfs) and reboot.
 # Boot 2 (initramfs, before the root is mounted), in phases that each
 # survive a cut and resume on the next boot:
-# 1. shrink the ext4 to 2 GiB and make the rest a partition;
+# 1. shrink the ext4 and make the rest a partition;
 # 2. mkfs.xfs it and copy the whole root into it (the ext4 stays the
 #    root until phase 4: a failure up to here boots on as before);
-# 3. strip the ext4 to /boot's files at its top, with boot -> . so GRUB
-#    finds /boot/grub there as it always did;
-# 4. in one write of the partition table, make the XFS the root: the
-#    root's partition number (1: DigitalOcean's restore of a snapshot
-#    expects the root there, and fails otherwise) and its PARTUUID (the
-#    kernel's root=PARTUUID=..., GRUB's config and fstab untouched).
-#    Then reboot.
+# 3. /boot in the root: strip the ext4 to /boot's files;
+# 4. in one write of the partition table, make the XFS the root, then
+#    reboot.
 # The XFS partition's GPT name holds the phase: devopsy-new,
 # devopsy-copied, devopsy-stripped, devopsy-root (done: nothing,
 # ever). Messages go to the serial console.
 # Boot 3: a plain boot on XFS. A per-boot script empties the copy of
 # /boot the root kept under its mount point, removes the conversion and
-# itself, and reinstalls GRUB as its updates do.
-# Later: a disk resize grows the root as on any Debian (growroot,
-# cloud-init's resizefs and systemd's growfs all grow XFS), and kernel
-# and GRUB updates write /boot as they always did.
+# itself, and rebuilds the initramfs and GRUB's config as their updates
+# do. Its lines and boot 1's, with their times, are in
+# /var/log/cloud-init-output.log.
+# Later: a disk resize grows the root as on any server of the
+# distribution, and kernel and GRUB updates write /boot as they always
+# did.
 packages: [xfsprogs, gdisk]
 write_files:
-  - path: /etc/initramfs-tools/hooks/devopsy-xfs
+  - path: /usr/local/lib/devopsy-xfs/convert
     permissions: "0755"
     content: |
       #!/bin/sh
-      case $1 in prereqs) echo ""; exit 0;; esac
-      . /usr/share/initramfs-tools/hook-functions
-      [ -x /etc/initramfs-tools/scripts/local-premount/devopsy-xfs ] || exit 0
-      manual_add_modules xfs ext4
-      # GNU's and util-linux's, never the initramfs's own (klibc's).
-      mkdir -p "$DESTDIR/devopsy/bin"
-      for b in /usr/sbin/e2fsck /usr/sbin/resize2fs /usr/sbin/sgdisk /usr/sbin/blockdev \
-        /usr/sbin/blkid /usr/sbin/mkfs.xfs /usr/bin/cp /usr/bin/mv /usr/bin/ln /usr/bin/rm \
-        /usr/bin/mount /usr/bin/umount /usr/bin/mawk /usr/bin/sed; do
-        copy_exec "$b" /devopsy/bin
-      done
-      ln -sf mawk "$DESTDIR/devopsy/bin/awk"
-  - path: /etc/initramfs-tools/scripts/local-premount/devopsy-xfs
-    permissions: "0755"
-    content: |
-      #!/bin/sh
-      # One-time conversion of the root to XFS (see the top of cloud-init.yaml).
-      case $1 in prereqs) echo ""; exit 0;; esac
-      . /scripts/functions
-      PATH=/devopsy/bin:$PATH
+      # One-time conversion of the root to XFS, run from the initramfs before
+      # the root is mounted (see the top of cloud-init.yaml). MODE, from boot
+      # 1: boot-in-root or boot-separate.
+      PATH=/devopsy/bin:$PATH:/usr/sbin:/usr/bin:/sbin:/bin
+      . /devopsy/conf
       say() { echo "devopsy-xfs: $*" >/dev/kmsg 2>/dev/null || echo "devopsy-xfs: $*"; }
-      root=$(resolve_device "$ROOT") && [ -b "$root" ] || { say "no root device ($ROOT)"; exit 0; }
+      spec=
+      for a in $(cat /proc/cmdline); do case $a in root=*) spec=${a#root=} ;; esac; done
+      case $spec in
+        /dev/*) root=$spec ;;
+        ?*) root=$(blkid -l -o device -t "$spec") ;;
+        *) root= ;;
+      esac
+      [ -b "$root" ] || { say "no root device ($spec)"; exit 0; }
       sys=/sys/class/block/${root##*/}
       [ -f "$sys/partition" ] || { say "$root is no partition"; exit 0; }
       disk=$(cd -P "$sys/.." && echo "/dev/${PWD##*/}")
@@ -74,104 +76,224 @@ write_files:
         done
       }
       field() { sgdisk -i "$1" "$disk" | sed -n "s/^$2: \([0-9A-Fa-f-]*\).*/\1/p"; }
+      reboot_now() { sync; reboot -f; echo b >/proc/sysrq-trigger; }
+      reread() { blockdev --rereadpt "$disk" || true; udevadm settle -t 10 || true; table=$(sgdisk -p "$disk"); }
+      free_num() { n=1; while echo "$table" | awk -v n="$n" '$1 == n { f=1 } END { exit !f }'; do n=$((n + 1)); done; echo "$n"; }
+      ss=$(echo "$table" | sed -n 's|^Sector size (logical/physical): \([0-9]*\)/.*|\1|p')
+      last=$(echo "$table" | sed -n 's/.*last usable sector is \([0-9]*\).*/\1/p')
+      [ -n "$ss" ] && [ -n "$last" ] || { say "cannot read $disk"; exit 0; }
+      gib=$((1073741824 / ss)); mib=$((1048576 / ss))
       [ -n "$(name_of devopsy-root)" ] && exit 0
-      bnum=$(name_of devopsy-boot)
+      # The ext4's partition: /boot from here on (devopsy-boot), or the old
+      # root, moved to the end of the disk (devopsy-moving, devopsy-old).
+      ename=devopsy-boot; [ "$MODE" = boot-separate ] && ename=devopsy-old
+      enum=$(name_of "$ename")
       state=
       for s in new copied stripped; do
         xnum=$(name_of devopsy-$s)
         [ -n "$xnum" ] && { state=$s; break; }
       done
+      if [ -z "$state" ] && [ -n "$(name_of devopsy-moving)" ]; then
+        enum=$(name_of devopsy-moving); state=moving
+      fi
       if [ -z "$state" ]; then
-        # Phase 1: shrink the ext4 to 2 GiB, the rest a new partition.
-        [ -z "$bnum" ] || { say "devopsy-boot without its XFS partition, not converting"; exit 0; }
-        read -r bnum <"$sys/partition"
+        # Phase 1: shrink the ext4 (to 2 GiB, or to its minimum).
+        [ -z "$enum" ] || { say "$ename without its XFS partition, not converting"; exit 0; }
+        read -r enum <"$sys/partition"
         [ "$(blkid -p -s TYPE -o value "$root")" = ext4 ] || { say "$root is not ext4, not converting"; exit 0; }
-        ss=$(echo "$table" | sed -n 's|^Sector size (logical/physical): \([0-9]*\)/.*|\1|p')
-        last=$(echo "$table" | sed -n 's/.*last usable sector is \([0-9]*\).*/\1/p')
-        start=$(field "$bnum" "First sector")
-        type=$(field "$bnum" "Partition GUID code")
-        uuid=$(field "$bnum" "Partition unique GUID")
-        [ -n "$ss" ] && [ -n "$last" ] && [ -n "$start" ] && [ -n "$type" ] && [ -n "$uuid" ] ||
-          { say "cannot read partition $bnum"; exit 0; }
-        gib=$((1073741824 / ss))
-        end=$((start + 2 * gib - 1))
-        # Everything after the root must be free (it is: growroot made the
-        # root the last partition), with 4 GiB at least for the XFS.
-        if echo "$table" | awk -v e="$end" '$1 ~ /^[0-9]+$/ && $2 > e { f=1 } END { exit !f }'; then
+        start=$(field "$enum" "First sector")
+        type=$(field "$enum" "Partition GUID code")
+        uuid=$(field "$enum" "Partition unique GUID")
+        [ -n "$start" ] && [ -n "$type" ] && [ -n "$uuid" ] || { say "cannot read partition $enum"; exit 0; }
+        # Everything after the root must be free (it is: the root was grown
+        # over the disk), with room for the XFS.
+        if echo "$table" | awk -v s="$start" '$1 ~ /^[0-9]+$/ && $2 > s { f=1 } END { exit !f }'; then
           say "a partition follows the root, not converting"; exit 0
         fi
-        [ $((last - end)) -ge $((4 * gib)) ] || { say "disk too small, not converting"; exit 0; }
-        xnum=1; while echo "$table" | awk -v n="$xnum" '$1 == n { f=1 } END { exit !f }'; do xnum=$((xnum + 1)); done
-        say "shrinking $root to 2G, XFS partition $xnum on $disk"
+        [ $((last - start)) -ge $((7 * gib)) ] || { say "disk too small, not converting"; exit 0; }
+        say "shrinking $root ($MODE)"
         e2fsck -fy "$root"; rc=$?
         [ "$rc" -le 1 ] || { say "e2fsck failed ($rc), not converting"; exit 0; }
-        resize2fs "$root" 2G || { say "resize2fs failed, not converting"; exit 0; }
-        # The same start, type and PARTUUID: still the root until phase 4.
-        sgdisk -d "$bnum" -n "$bnum:$start:$end" -t "$bnum:$type" -u "$bnum:$uuid" -c "$bnum:devopsy-boot" \
-          -n "$xnum:$((end + 1)):$last" -t "$xnum:8300" -c "$xnum:devopsy-new" "$disk" ||
-          { say "sgdisk failed, not converting"; exit 0; }
-        blockdev --rereadpt "$disk" || true
-        wait_for_udev 10
+        if [ "$MODE" = boot-in-root ]; then
+          resize2fs "$root" 2G || { say "resize2fs failed, not converting"; exit 0; }
+          end=$((start + 2 * gib - 1))
+          xnum=$(free_num)
+          say "XFS partition $xnum on $disk"
+          # The same start, type and PARTUUID: still the root until phase 4.
+          sgdisk -d "$enum" -n "$enum:$start:$end" -t "$enum:$type" -u "$enum:$uuid" -c "$enum:$ename" \
+            -n "$xnum:$((end + 1)):$last" -t "$xnum:8300" -c "$xnum:devopsy-new" "$disk" ||
+            { say "sgdisk failed, not converting"; exit 0; }
+          reread
+          state=new
+        else
+          resize2fs -M "$root" || { say "resize2fs failed, not converting"; exit 0; }
+          bytes=$(dumpe2fs -h "$root" 2>/dev/null | awk -F: '/^Block count/ { c = $2 } /^Block size/ { s = $2 } END { printf "%d", c * s }')
+          [ "${bytes:-0}" -gt 0 ] || { say "cannot read $root's size, not converting"; exit 0; }
+          size=$((((bytes + ss - 1) / ss + 2 * mib) / mib * mib))
+          # Its copy at the end of the disk must not overlap it, and leave
+          # the XFS room for the root before it.
+          [ $(((last + 1 - size) / mib * mib - start)) -ge $((size + gib)) ] ||
+            { say "disk too small, not converting"; exit 0; }
+          sgdisk -d "$enum" -n "$enum:$start:$((start + size - 1))" -t "$enum:$type" -u "$enum:$uuid" \
+            -c "$enum:devopsy-moving" "$disk" || { say "sgdisk failed, not converting"; exit 0; }
+          reread
+          state=moving
+        fi
+      fi
+      if [ "$state" = moving ]; then
+        # Phase 1b, /boot apart: the shrunk ext4 copied whole to the end of
+        # the disk, then one write moves its partition there and gives the
+        # space before it to the XFS, which grows over the ext4's once it
+        # goes: no space is left unused. Until that write the partition is
+        # the copy's source, untouched.
+        start=$(field "$enum" "First sector"); end=$(field "$enum" "Last sector")
+        type=$(field "$enum" "Partition GUID code"); uuid=$(field "$enum" "Partition unique GUID")
+        ext=$(dev_of "$enum")
+        [ -n "$start" ] && [ -n "$end" ] && [ -n "$type" ] && [ -n "$uuid" ] && [ -b "$ext" ] ||
+          { say "cannot read partition $enum"; exit 0; }
+        size=$((end - start + 1)); nstart=$(((last + 1 - size) / mib * mib))
+        say "moving $ext to the end of $disk"
+        dd if="$ext" of="$disk" bs=1M seek=$((nstart / mib)) count=$((size / mib)) conv=fsync status=none ||
+          { say "the move failed, booting on ext4"; exit 0; }
+        xnum=$(free_num)
+        say "XFS partition $xnum on $disk"
+        sgdisk -d "$enum" -n "$enum:$nstart:$((nstart + size - 1))" -t "$enum:$type" -u "$enum:$uuid" -c "$enum:$ename" \
+          -n "$xnum:$start:$((nstart - 1))" -t "$xnum:8300" -c "$xnum:devopsy-new" "$disk" ||
+          { say "sgdisk failed, booting on ext4"; exit 0; }
+        reread
         state=new
       fi
-      boot=$(dev_of "$bnum"); xfs=$(dev_of "$xnum")
-      if [ -z "$boot" ] || [ -z "$xfs" ] || [ ! -b "$boot" ] || [ ! -b "$xfs" ]; then
-        say "the kernel kept the old table, rebooting"; sync; reboot -f
+      ext=$(dev_of "$enum"); xfs=$(dev_of "$xnum")
+      if [ -z "$ext" ] || [ -z "$xfs" ] || [ ! -b "$ext" ] || [ ! -b "$xfs" ]; then
+        say "the kernel kept the old table, rebooting"; reboot_now
       fi
-      mkdir -p /devopsy/boot /devopsy/root
-      b=/devopsy/boot
+      mkdir -p /devopsy/ext4 /devopsy/root
+      e=/devopsy/ext4
       if [ "$state" = new ]; then
-        # Phase 2: the whole root into a new XFS, its fstab rewritten.
+        # Phase 2: the whole root into a new XFS, its fstab rewritten: the
+        # root's line for XFS (by the filesystem UUID the XFS takes, with
+        # /boot apart), and with /boot in the root a line for the ext4.
         say "copying the root into XFS on $xfs"
         mkfs.xfs -f "$xfs" || { say "mkfs.xfs failed, booting on ext4"; exit 0; }
-        mount -t ext4 -o ro "$boot" "$b" || { say "cannot mount $boot, booting on ext4"; exit 0; }
-        mount -t xfs "$xfs" /devopsy/root || { umount "$b"; say "cannot mount $xfs, booting on ext4"; exit 0; }
-        bootfs=$(blkid -p -s UUID -o value "$boot")
-        if cp -ax "$b/." /devopsy/root/ && [ -n "$bootfs" ] &&
-          awk -v b="$bootfs" '$2 == "/" { $3 = "xfs"; $4 = "defaults,x-systemd.growfs"; $6 = 0; print;
-            print "UUID=" b " /boot ext4 defaults,nofail,discard,errors=remount-ro 0 2"; next } { print }' \
-            "$b/etc/fstab" >/devopsy/root/etc/fstab; then
-          umount /devopsy/root; umount "$b"
+        modprobe -q xfs || true
+        mount -t ext4 -o ro "$ext" "$e" || { say "cannot mount $ext, booting on ext4"; exit 0; }
+        mount -t xfs "$xfs" /devopsy/root || { umount "$e"; say "cannot mount $xfs, booting on ext4"; exit 0; }
+        fs=$(blkid -p -s UUID -o value "$ext")
+        if cp -ax "$e/." /devopsy/root/ && [ -n "$fs" ] &&
+          awk -v fs="$fs" -v mode="$MODE" '$2 == "/" {
+              if (mode == "boot-separate") $1 = "UUID=" fs
+              $3 = "xfs"; $4 = "defaults,x-systemd.growfs"; $6 = 0; print
+              if (mode == "boot-in-root") print "UUID=" fs " /boot ext4 defaults,nofail,discard,errors=remount-ro 0 2"
+              next
+            } { print }' "$e/etc/fstab" >/devopsy/root/etc/fstab; then
+          umount /devopsy/root; umount "$e"
         else
-          umount /devopsy/root; umount "$b"; say "the copy failed, booting on ext4"; exit 0
+          umount /devopsy/root; umount "$e"; say "the copy failed, booting on ext4"; exit 0
         fi
         sync
         sgdisk -c "$xnum:devopsy-copied" "$disk" || { say "sgdisk failed, booting on ext4"; exit 0; }
         state=copied
       fi
-      if [ "$state" = copied ]; then
+      if [ "$state" = copied ] && [ "$MODE" = boot-in-root ]; then
         # Phase 3: the ext4 holds /boot's files at its top, with boot -> .
         # Every step leaves GRUB's /boot/grub there: the files are linked
         # up before one rename swaps the directory for the link. Cut from
         # here on, the next boot comes back here before it needs a root.
-        say "making $boot /boot"
-        mount -t ext4 "$boot" "$b" || { say "cannot mount $boot"; exit 0; }
-        if [ ! -L "$b/boot" ]; then
-          for e in "$b"/* "$b"/.[!.]* "$b"/..?*; do
-            [ -e "$e" ] || [ -L "$e" ] || continue
-            case ${e##*/} in boot|lost+found) ;; *) rm -rf "$e" ;; esac
+        say "making $ext /boot"
+        mount -t ext4 "$ext" "$e" || { say "cannot mount $ext"; exit 0; }
+        if [ ! -L "$e/boot" ]; then
+          for f in "$e"/* "$e"/.[!.]* "$e"/..?*; do
+            [ -e "$f" ] || [ -L "$f" ] || continue
+            case ${f##*/} in boot|lost+found) ;; *) rm -rf "$f" ;; esac
           done
-          cp -al "$b/boot/." "$b/" && ln -s . "$b/.devopsy-boot" && mv -T --exchange "$b/.devopsy-boot" "$b/boot" ||
-            { umount "$b"; say "cannot move /boot's files"; exit 0; }
+          cp -al "$e/boot/." "$e/" && ln -s . "$e/.devopsy-boot" && mv -T --exchange "$e/.devopsy-boot" "$e/boot" ||
+            { umount "$e"; say "cannot move /boot's files"; exit 0; }
         fi
-        rm -rf "$b/.devopsy-boot"
-        umount "$b"
+        rm -rf "$e/.devopsy-boot"
+        umount "$e"
         sync
         sgdisk -c "$xnum:devopsy-stripped" "$disk" || { say "sgdisk failed"; exit 0; }
       fi
-      # Phase 4: the XFS takes the root's number and PARTUUID, the ext4
-      # the XFS's number and a new PARTUUID, in one write.
-      bstart=$(field "$bnum" "First sector"); bend=$(field "$bnum" "Last sector")
+      # Phase 4: the XFS takes the root's partition number and PARTUUID in
+      # one write. With /boot in the root, the ext4 takes the XFS's number
+      # and a new PARTUUID; with /boot apart, the XFS takes the ext4's
+      # filesystem UUID first and the ext4 goes, its signature wiped so it
+      # is never found with that UUID again. Cut between any two steps, the
+      # root still resolves to a complete copy.
+      estart=$(field "$enum" "First sector"); eend=$(field "$enum" "Last sector")
       xstart=$(field "$xnum" "First sector"); xend=$(field "$xnum" "Last sector")
-      type=$(field "$bnum" "Partition GUID code"); uuid=$(field "$bnum" "Partition unique GUID")
-      [ -n "$bstart" ] && [ -n "$bend" ] && [ -n "$xstart" ] && [ -n "$xend" ] && [ -n "$type" ] && [ -n "$uuid" ] ||
+      type=$(field "$enum" "Partition GUID code"); uuid=$(field "$enum" "Partition unique GUID")
+      [ -n "$estart" ] && [ -n "$eend" ] && [ -n "$xstart" ] && [ -n "$xend" ] && [ -n "$type" ] && [ -n "$uuid" ] ||
         { say "cannot read the partitions"; exit 0; }
       say "making $xfs the root"
-      sgdisk -d "$bnum" -d "$xnum" -n "$bnum:$xstart:$xend" -t "$bnum:$type" -u "$bnum:$uuid" -c "$bnum:devopsy-root" \
-        -n "$xnum:$bstart:$bend" -t "$xnum:8300" -u "$xnum:R" -c "$xnum:devopsy-boot" "$disk" ||
-        { say "sgdisk failed"; exit 0; }
+      if [ "$MODE" = boot-in-root ]; then
+        sgdisk -d "$enum" -d "$xnum" -n "$enum:$xstart:$xend" -t "$enum:$type" -u "$enum:$uuid" -c "$enum:devopsy-root" \
+          -n "$xnum:$estart:$eend" -t "$xnum:8300" -u "$xnum:R" -c "$xnum:devopsy-boot" "$disk" ||
+          { say "sgdisk failed"; exit 0; }
+      else
+        fs=$(blkid -p -s UUID -o value "$ext")
+        if [ -n "$fs" ]; then
+          xfs_db -x -c "uuid $fs" "$xfs" >/dev/null || { say "cannot give $xfs the root's UUID"; exit 0; }
+          wipefs -a -q "$ext" || { say "cannot wipe $ext"; exit 0; }
+        fi
+        sgdisk -d "$enum" -d "$xnum" -n "$enum:$xstart:$last" -t "$enum:$type" -u "$enum:$uuid" -c "$enum:devopsy-root" "$disk" ||
+          { say "sgdisk failed"; exit 0; }
+      fi
       say "done, rebooting"
-      sync; reboot -f
+      reboot_now
+  # initramfs-tools (Debian): the script and the tools into the initramfs.
+  - path: /etc/initramfs-tools/hooks/devopsy-xfs
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      case $1 in prereqs) echo ""; exit 0;; esac
+      . /usr/share/initramfs-tools/hook-functions
+      [ -f /etc/devopsy-xfs.conf ] || exit 0
+      manual_add_modules xfs ext4
+      mkdir -p "$DESTDIR/devopsy/bin"
+      cp /usr/local/lib/devopsy-xfs/convert "$DESTDIR/devopsy/convert"
+      cp /etc/devopsy-xfs.conf "$DESTDIR/devopsy/conf"
+      # GNU's and util-linux's, never the initramfs's own (klibc's).
+      for b in /usr/sbin/e2fsck /usr/sbin/resize2fs /usr/sbin/dumpe2fs /usr/sbin/sgdisk /usr/sbin/blockdev \
+        /usr/sbin/blkid /usr/sbin/wipefs /usr/sbin/mkfs.xfs /usr/sbin/xfs_db /usr/bin/cp /usr/bin/mv \
+        /usr/bin/ln /usr/bin/rm /usr/bin/mount /usr/bin/umount /usr/bin/mawk /usr/bin/sed; do
+        copy_exec "$b" /devopsy/bin
+      done
+      ln -sf mawk "$DESTDIR/devopsy/bin/awk"
+  - path: /etc/initramfs-tools/scripts/local-premount/devopsy-xfs
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      case $1 in prereqs) echo ""; exit 0;; esac
+      [ -x /devopsy/convert ] && /devopsy/convert
+      exit 0
+  # dracut (Ubuntu): the same, as a module of its own.
+  - path: /usr/lib/dracut/modules.d/99devopsy-xfs/module-setup.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      check() { [ -f /etc/devopsy-xfs.conf ] || return 1; return 255; }
+      depends() { return 0; }
+      install() {
+        inst_simple /usr/local/lib/devopsy-xfs/convert /devopsy/convert
+        inst_simple /etc/devopsy-xfs.conf /devopsy/conf
+        # shellcheck disable=SC2154 # dracut sets moddir
+        inst_hook pre-mount 01 "$moddir/devopsy-xfs-hook.sh"
+        inst_multiple e2fsck resize2fs dumpe2fs sgdisk blockdev blkid wipefs mkfs.xfs xfs_db \
+          cp mv ln rm mkdir mount umount awk sed dd sync udevadm modprobe reboot
+      }
+  - path: /usr/lib/dracut/modules.d/99devopsy-xfs/devopsy-xfs-hook.sh
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Sourced by dracut: the conversion runs as a script of its own.
+      [ -x /devopsy/convert ] && /devopsy/convert
+  # The module, and XFS's driver: Ubuntu builds host-only, which leaves
+  # out a driver the running system does not use, instmods or not.
+  - path: /etc/dracut.conf.d/devopsy-xfs.conf
+    content: |
+      add_dracutmodules+=" devopsy-xfs "
+      add_drivers+=" xfs "
   - path: /var/lib/cloud/scripts/per-boot/devopsy-xfs-finish
     permissions: "0755"
     content: |
@@ -179,8 +301,8 @@ write_files:
       # Once the server runs on XFS: empties the copy of /boot under its
       # mount point (immutable from then on, so nothing writes there with
       # /boot missing), removes the conversion and this script, and
-      # reinstalls GRUB as its updates do (grub-cloud-amd64: the BIOS core
-      # by partition number again, the EFI one, its config).
+      # rebuilds the initramfs and GRUB as their updates do (on Debian,
+      # grub-cloud-amd64: the BIOS core by partition number again).
       set -eu
       say() { echo "$(date -u '+%F %T') devopsy-xfs: $*"; }
       # Only once the conversion is done. Said on every boot until then:
@@ -198,7 +320,9 @@ write_files:
       find /run/devopsy-xfs/boot -mindepth 1 -delete
       chattr +i /run/devopsy-xfs/boot
       umount /run/devopsy-xfs
-      rm -f /etc/initramfs-tools/hooks/devopsy-xfs /etc/initramfs-tools/scripts/local-premount/devopsy-xfs
+      rm -rf /etc/initramfs-tools/hooks/devopsy-xfs /etc/initramfs-tools/scripts/local-premount/devopsy-xfs \
+        /usr/lib/dracut/modules.d/99devopsy-xfs /etc/dracut.conf.d/devopsy-xfs.conf \
+        /usr/local/lib/devopsy-xfs /etc/devopsy-xfs.conf
       update-initramfs -u -k all
       if dpkg -s grub-cloud-amd64 >/dev/null 2>&1; then
         dpkg-reconfigure -f noninteractive grub-cloud-amd64
@@ -208,20 +332,27 @@ write_files:
       say "done, the root is XFS"
 runcmd:
   - |
-    # The GRUB core that finds the ext4 by UUID, then the conversion into
-    # the initramfs; either failing, nothing of it is left to run later.
+    # The layout, then (with /boot in the root) the GRUB core that finds
+    # the ext4 by UUID, then the conversion into the initramfs; any of it
+    # failing, nothing of it is left to run later.
     say() { echo "$(date -u '+%F %T') devopsy-xfs: $*"; }
-    if disk=/dev/$(lsblk -no PKNAME "$(findmnt -no SOURCE /)") && fs=$(findmnt -no UUID /) &&
-      printf 'search.fs_uuid %s root\nset prefix=($root)/boot/grub\n' "$fs" >/run/devopsy-xfs.cfg &&
-      grub-mkimage -O i386-pc -o /boot/grub/i386-pc/core.img -c /run/devopsy-xfs.cfg -p /boot/grub \
-        biosdisk part_gpt ext2 search_fs_uuid &&
-      /usr/lib/grub/i386-pc/grub-bios-setup -d /boot/grub/i386-pc "$disk" &&
+    mode=boot-in-root
+    if mountpoint -q /boot; then mode=boot-separate; fi
+    core() {
+      disk=/dev/$(lsblk -no PKNAME "$(findmnt -no SOURCE /)") && fs=$(findmnt -no UUID /) &&
+        printf 'search.fs_uuid %s root\nset prefix=($root)/boot/grub\n' "$fs" >/run/devopsy-xfs.cfg &&
+        grub-mkimage -O i386-pc -o /boot/grub/i386-pc/core.img -c /run/devopsy-xfs.cfg -p /boot/grub \
+          biosdisk part_gpt ext2 search_fs_uuid &&
+        /usr/lib/grub/i386-pc/grub-bios-setup -d /boot/grub/i386-pc "$disk"
+    }
+    if echo "MODE=$mode" >/etc/devopsy-xfs.conf && { [ "$mode" = boot-separate ] || core; } &&
       update-initramfs -u; then
-      say "converting on the next boot"
+      say "converting on the next boot ($mode)"
     else
       say "not converting" >&2
-      rm -f /etc/initramfs-tools/hooks/devopsy-xfs /etc/initramfs-tools/scripts/local-premount/devopsy-xfs \
-        /var/lib/cloud/scripts/per-boot/devopsy-xfs-finish
+      rm -rf /etc/initramfs-tools/hooks/devopsy-xfs /etc/initramfs-tools/scripts/local-premount/devopsy-xfs \
+        /usr/lib/dracut/modules.d/99devopsy-xfs /etc/dracut.conf.d/devopsy-xfs.conf \
+        /usr/local/lib/devopsy-xfs /etc/devopsy-xfs.conf /var/lib/cloud/scripts/per-boot/devopsy-xfs-finish
       update-initramfs -u
     fi
 power_state:

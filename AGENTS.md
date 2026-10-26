@@ -1,7 +1,8 @@
 # AGENTS.md
 
-devopsy-server prepares a Debian 13 host for devopsy. It is a single bash
-script, `setup.sh`, run as root, often piped from curl, and
+devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for devopsy. It
+is a single bash script, `setup.sh`, run as root, often piped from curl,
+and
 `cloud-init.yaml`, user data that converts a new server's root to XFS
 before it (below, "The XFS root"). Read `README.md` for the user-facing
 behavior and keep it in sync: the steps table, the settings table, "An
@@ -27,8 +28,18 @@ XFS root", "Without the script" (each step by hand: a change to a
 - **Never change the SSH server configuration.** Why: providers set it
   up, and a mistake there locks the operator out.
 - **No host firewall:** the provider's firewall covers it (README.md).
-- **Debian 13 only,** with apt and systemd directly and no configuration
-  management dependencies.
+- **Debian 13 and Ubuntu 26.04, nothing else,** with apt and systemd
+  directly and no configuration management dependencies. Each is
+  tested before it is listed (`preflight`; `DEVOPSY_FORCE=1` for any
+  other). What differs is small: Docker's repository is
+  `download.docker.com/linux/$ID`, and on Ubuntu `coreutils-from-gnu`
+  keeps GNU's coreutils the active ones, which devopsy-cli's scripts on
+  servers expect (GNU `tail`, `mv -T`): Ubuntu ships Rust's uutils
+  beside them and may make them the default (26.04 on DigitalOcean had
+  GNU's, checked 2026-10-26). `NEEDRESTART_SUSPEND=1` on installs keeps
+  Ubuntu's needrestart from restarting services and reporting into the
+  output. Ubuntu's `sudo` is sudo-rs, which reads `/etc/sudoers.d` too;
+  its kernel has AppArmor, applied to containers (`docker-default`).
 - **Never create or print secrets.** Keys for the deploy user are
   devopsy-cli's (`--ssh-keys`), made on the operator's machine.
 - **A bootstrap of the host only.** Per-project deployment belongs in
@@ -102,12 +113,11 @@ XFS root", "Without the script" (each step by hand: a change to a
 
 `cloud-init.yaml` converts the image's ext4 root to XFS on a new
 server's first boots: the XFS as partition 1 over the rest of the disk,
-the image's ext4 kept in place as a 2 GiB `/boot`, and nothing of the
-conversion left behind. Why XFS: reflinks, so a copy of an
-environment's data takes seconds whatever its size; Debian's kernel has
-it, it suits databases, and it grows online (never shrinks). Its
-comments say how each boot goes; here are the decisions and the
-findings.
+GRUB reading only ext4, and nothing of the conversion left behind. Why
+XFS: reflinks, so a copy of an environment's data takes seconds whatever
+its size; Debian's and Ubuntu's kernels have it, it suits databases,
+and it grows online (never shrinks). Its comments say how each boot
+goes; here are the decisions and the findings.
 
 - **User data, not a step of `setup.sh`** (decided): the conversion
   needs the disk before anything is on it, and two reboots. `setup.sh`
@@ -121,6 +131,15 @@ findings.
   system. One filesystem has no size to choose, no mounts to order and
   nothing to fail when a partition is missing. What the conversion
   risks is a new, empty server's: one that fails is created again.
+- **By layout, not by distribution:** boot 1 notes whether `/boot` is
+  its own mount (`MODE`, `/etc/devopsy-xfs.conf`): Debian 13's image
+  has `/boot` in the root (`boot-in-root`), Ubuntu 26.04's on a
+  partition of its own (`boot-separate`). One script converts both
+  (`/usr/local/lib/devopsy-xfs/convert`), run from the initramfs by
+  whichever builds it: initramfs-tools' `local-premount` on Debian,
+  dracut's `pre-mount` on Ubuntu, both through `update-initramfs`
+  (dracut's own on Ubuntu). The rest of this section is the
+  `boot-in-root` layout's unless it says Ubuntu.
 - **`/boot` stays the image's ext4, kept in place:** GRUB never reads
   XFS (its BIOS core carries only the modules for `/boot`'s filesystem,
   and `mkfs.xfs`'s defaults, like `nrext64`, may be newer than a
@@ -165,7 +184,30 @@ findings.
   root: an earlier version ran on an XFS root with its last phase left
   (found).
 - **Debian 13's initramfs has klibc's tools, no busybox:** the hook
-  copies GNU's and util-linux's into `/devopsy/bin`.
+  copies GNU's and util-linux's into `/devopsy/bin`. The script reads
+  `root=` from the kernel's command line itself (`blkid -t`), so it
+  needs nothing of either initramfs's own functions.
+- **On Ubuntu GRUB is untouched:** `/boot` is its own ext4 (`vda13`),
+  so the root is only the kernel's (`root=UUID=`, the filesystem's).
+  The XFS takes the root's partition number, PARTUUID and filesystem
+  UUID (`xfs_db -x -c "uuid ..."`), and the ext4 goes, its signature
+  wiped first (`wipefs`): a stale ext4 with the root's UUID would
+  shadow the root if a partition were ever made over it. Each step
+  leaves the root resolving to a complete copy.
+- **On Ubuntu no space is lost:** the ext4 is shrunk to its minimum
+  (3.4 GiB for 2.5 used: its inode tables), copied whole to the end of
+  the disk (`dd`, `devopsy-moving`), and one write moves its partition
+  there and gives the space before it to the XFS (`devopsy-old`), which
+  grows over the ext4's once it goes (`x-systemd.growfs`). Without the
+  move the shrunk ext4's space stayed unused before the root (tried:
+  XFS grows only at its end). Until that write the partition is the
+  copy's source, untouched, so a cut copies again.
+- **dracut runs `pre-mount` hooks sourced into its own shell:** the
+  hook only runs the script. Ubuntu builds host-only, which left out
+  XFS's driver even with `instmods`, in `install()` or
+  `installkernel()` (found: `mount: unknown filesystem type 'xfs'`,
+  the server booting on ext4 and retrying); `add_drivers+=" xfs "` in
+  `/etc/dracut.conf.d` puts it in. The script also `modprobe`s it.
 - **Growing is the image's own:** growroot grows the ext4 over the
   disk on boot 1 (phase 1 shrinks it), and the conversion's boot
   reboots before growroot runs. After it the XFS is the last partition,
@@ -180,7 +222,14 @@ findings.
   s against 7.1 to 7.8, deleting them 1.0 s against 2.5, random 16k
   writes 19.7k against 23.8k IOPS; a reflink copy of a 650 MB database
   0.03 s. Swap on a `fallocate`d file works (`setup.sh`'s swap step).
-- **Tested on DigitalOcean only** (2026-10-26, Debian 13): the
+- **Tested on DigitalOcean only** (2026-10-26). Ubuntu 26.04 (kernel
+  7.0, GRUB 2.14, dracut 110): the conversion at 10 GB (8.9 GiB XFS,
+  nothing unused), and resumed after a failure past phase 1 (the
+  missing XFS driver); a kernel upgrade, GRUB's packages reinstalled
+  (`grub-install` for BIOS and EFI) and a kernel removed, each with
+  reboots; `setup.sh`; a release like Debian's, its reflink snapshot
+  and restore; a live snapshot onto a new 25 GB Droplet, a rebuild from
+  it and a disk resize. No release upgrade (26.04 is offered none yet). Debian 13: the
   conversion at 10 and 25 GB; reboots; a kernel upgrade, GRUB's
   packages reinstalled, a kernel removed and an upgrade to forky
   (Debian 14: kernel 7.2, GRUB 2.14), each with reboots; `setup.sh`, a
@@ -199,16 +248,15 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable setup.sh
 The scripts inside `cloud-init.yaml`, extracted first:
 
 ```sh
-for p in /etc/initramfs-tools/hooks/devopsy-xfs \
-  /etc/initramfs-tools/scripts/local-premount/devopsy-xfs \
-  /var/lib/cloud/scripts/per-boot/devopsy-xfs-finish; do
+rm -rf /tmp/ci && mkdir /tmp/ci && i=0
+for p in $(docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 \
+  '.write_files[] | select(.permissions == "0755") | .path' cloud-init.yaml); do
+  i=$((i + 1))
   docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 \
-    ".write_files[] | select(.path == \"$p\") | .content" cloud-init.yaml \
-    >"/tmp/$(basename "$(dirname "$p")")-$(basename "$p")"
+    ".write_files[] | select(.path == \"$p\") | .content" cloud-init.yaml >"/tmp/ci/$i-${p##*/}"
 done
-{ echo '#!/bin/sh'; docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 '.runcmd[0]' cloud-init.yaml; } >/tmp/runcmd
-docker run --rm -v /tmp:/mnt -w /mnt koalaman/shellcheck:stable -s sh -S warning \
-  hooks-devopsy-xfs local-premount-devopsy-xfs per-boot-devopsy-xfs-finish runcmd
+{ echo '#!/bin/sh'; docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 '.runcmd[0]' cloud-init.yaml; } >/tmp/ci/runcmd
+docker run --rm -v /tmp/ci:/mnt -w /mnt koalaman/shellcheck:stable -S warning $(ls /tmp/ci)
 ```
 
 `cloud-init.yaml` itself, with Debian 13's cloud-init:
@@ -222,8 +270,9 @@ docker run --rm -v "$PWD:/w:ro" debian:trixie sh -c 'apt-get update -qq &&
 It is tested on a cloud server (above, "The XFS root"), the smallest
 size, deleted afterwards.
 
-Test on a real Debian 13 machine, for example an OrbStack machine
-(`orb create debian:trixie devopsy-test`). Run the script with test
+Test on a real Debian 13 or Ubuntu 26.04 machine, for example an
+OrbStack machine (`orb create debian:trixie devopsy-test`, `orb create
+ubuntu:resolute devopsy-test`). Run the script with test
 settings, run it again without them to check idempotency, saved
 settings and `--help`, then `orb delete -f devopsy-test`.
 
