@@ -182,10 +182,16 @@ write_files:
       # reinstalls GRUB as its updates do (grub-cloud-amd64: the BIOS core
       # by partition number again, the EFI one, its config).
       set -eu
-      # Only once the conversion is done.
-      [ "$(lsblk -no PARTLABEL "$(findmnt -no SOURCE /)")" = devopsy-root ] ||
-        { echo "devopsy-xfs: the conversion is not done yet" >&2; exit 0; }
-      [ "$(findmnt -no FSTYPE /boot)" = ext4 ] || { echo "devopsy-xfs: /boot is not mounted" >&2; exit 1; }
+      say() { echo "$(date -u '+%F %T') devopsy-xfs: $*"; }
+      # Only once the conversion is done. Said on every boot until then:
+      # on a later boot than the first, the conversion failed before its
+      # copy (the serial console says why) and runs again on the next.
+      if [ "$(lsblk -no PARTLABEL "$(findmnt -no SOURCE /)")" != devopsy-root ]; then
+        say "the root is still $(findmnt -no FSTYPE /), the conversion runs on the next boot"
+        exit 0
+      fi
+      [ "$(findmnt -no FSTYPE /boot)" = ext4 ] || { say "/boot is not mounted" >&2; exit 1; }
+      say "finishing the conversion"
       mkdir -p /run/devopsy-xfs
       mount --bind / /run/devopsy-xfs
       chattr -i /run/devopsy-xfs/boot
@@ -199,19 +205,21 @@ write_files:
       fi
       update-grub
       rm -f "$0"
+      say "done, the root is XFS"
 runcmd:
   - |
     # The GRUB core that finds the ext4 by UUID, then the conversion into
     # the initramfs; either failing, nothing of it is left to run later.
+    say() { echo "$(date -u '+%F %T') devopsy-xfs: $*"; }
     if disk=/dev/$(lsblk -no PKNAME "$(findmnt -no SOURCE /)") && fs=$(findmnt -no UUID /) &&
       printf 'search.fs_uuid %s root\nset prefix=($root)/boot/grub\n' "$fs" >/run/devopsy-xfs.cfg &&
       grub-mkimage -O i386-pc -o /boot/grub/i386-pc/core.img -c /run/devopsy-xfs.cfg -p /boot/grub \
         biosdisk part_gpt ext2 search_fs_uuid &&
       /usr/lib/grub/i386-pc/grub-bios-setup -d /boot/grub/i386-pc "$disk" &&
       update-initramfs -u; then
-      echo "devopsy-xfs: converting on the next boot"
+      say "converting on the next boot"
     else
-      echo "devopsy-xfs: not converting" >&2
+      say "not converting" >&2
       rm -f /etc/initramfs-tools/hooks/devopsy-xfs /etc/initramfs-tools/scripts/local-premount/devopsy-xfs \
         /var/lib/cloud/scripts/per-boot/devopsy-xfs-finish
       update-initramfs -u

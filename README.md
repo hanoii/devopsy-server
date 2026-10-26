@@ -55,7 +55,9 @@ disk.
    Initialization scripts", pasted whole; or `doctl compute droplet
    create ... --user-data-file cloud-init.yaml`.
 2. It reboots twice on its own, about three minutes, then is ready:
-   `findmnt /` says `xfs`.
+   `findmnt /` says `xfs`, and `grep devopsy-xfs
+   /var/log/cloud-init-output.log` ends with "done, the root is XFS",
+   each line with its time.
 3. Run `setup.sh` as usual.
 
 What the server gets:
