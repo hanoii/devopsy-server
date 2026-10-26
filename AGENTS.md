@@ -2,10 +2,10 @@
 
 devopsy-server prepares a Debian 13 host for devopsy. It is a single bash
 script, `setup.sh`, run as root, often piped from curl, and
-`cloud-init.yaml`, user data that splits a new server's disk before it
-(below, "The data partition"). Read `README.md` for the user-facing
-behavior and keep it in sync: the steps table, the settings table, "A
-data partition", "Without the script" (each step by hand: a change to a
+`cloud-init.yaml`, user data that converts a new server's root to XFS
+before it (below, "The XFS root"). Read `README.md` for the user-facing
+behavior and keep it in sync: the steps table, the settings table, "An
+XFS root", "Without the script" (each step by hand: a change to a
 `step_*` function changes its commands there) and "Things to know".
 
 ## Rules
@@ -98,60 +98,97 @@ data partition", "Without the script" (each step by hand: a change to a
   <user>@<machine>@orb` instead, and test public DNS and certificates
   on a real server.
 
-## The data partition
+## The XFS root
 
-`cloud-init.yaml`: an ext4 root of `ROOT_GB` and an XFS partition with
-the rest on `/srv`, `DEVOPSY_ROOT=/srv/devopsy` and Docker's named
-volumes bound from `/srv/docker-volumes`. Why XFS: reflinks, so a copy
-of an environment's data on the same filesystem takes seconds whatever
-its size; Debian's kernel has it, it suits databases, and it grows
-online (never shrinks). Its comments say how
-each boot goes; here are the decisions and the findings.
+`cloud-init.yaml` converts the image's ext4 root to XFS on a new
+server's first boots: the XFS as partition 1 over the rest of the disk,
+the image's ext4 kept in place as a 2 GiB `/boot`, and nothing of the
+conversion left behind. Why XFS: reflinks, so a copy of an
+environment's data takes seconds whatever its size; Debian's kernel has
+it, it suits databases, and it grows online (never shrinks). Its
+comments say how each boot goes; here are the decisions and the
+findings.
 
-- **User data, not a step of `setup.sh`** (decided): the split needs
-  the disk before anything is on it, and two reboots. `setup.sh` stays
-  host setup, run after it as on any server, and knows nothing of it.
-- **The root cannot be kept small by cloud-init:** DigitalOcean's image
-  grows it in the initramfs (`cloud-initramfs-growroot`,
-  `local-bottom/growroot`) before cloud-init runs, then ext4 through
-  `x-systemd.growfs`; `growpart: off` and `resize_rootfs: false` come
-  too late. So boot 1 writes `/etc/growroot-disabled` (growroot then
-  skips) and a `local-premount` script into the initramfs, which
-  shrinks the root on boot 2, before it is mounted.
-- **State is the new partition's GPT name:** none (shrink and
-  partition), `devopsy-new` (make XFS), `devopsy-data` (done, nothing
-  ever again). XFS is only ever made on a partition the script created,
-  and every failure boots on, unsplit. The root's partition is
-  rewritten at the same start with the same type, PARTUUID and name:
-  the kernel boots `root=PARTUUID=`.
-- **Debian 13's initramfs has no busybox:** the hook copies `mawk` and
-  `sed` with the tools.
-- **`/etc/growroot-disabled` turns cloud-init's `growpart` off too**
-  ("growpart disabled: /etc/growroot-disabled exists"), so its config
-  needs `ignore_growroot_disabled: true`, with `devices: [/srv]` alone:
-  after a disk resize only the data partition can grow, and should.
-  Before the split `/srv` resolves to the root, which then cannot grow
-  past the data partition (NOCHANGE). The XFS grows in a per-boot
-  script (cloud-init's final stage, after growpart; `bootcmd` runs
-  before it, and `resizefs` grows only the root). `/srv` is ordered
-  before cloud-init's network stage, where growpart runs
-  (`x-systemd.before`: `nofail` alone orders it before nothing).
-- **Docker's named volumes are a bind, not Docker's `data-root`:**
-  images and build cache stay on the root, sized for them, and the data
-  partition holds data only. The bind's source is made by
-  `devopsy-docker-volumes.service`, after `srv.mount` and before the
-  bind (`x-systemd.requires`). A reflink across the bind works (checked
-  2026-10-26: the same filesystem).
-- **Without `/srv` nothing writes to the root disk:** `/srv` and
-  `/var/lib/docker/volumes` are immutable while unmounted, and Docker's
-  drop-in `RequiresMountsFor` both, so it fails with "dependency"
-  (checked with a wrong UUID: the deploy user's `mkdir` and root's
-  `touch` refused). The boot then waits out the missing device
-  (systemd's 90 s) before going on.
-- **Tested on DigitalOcean only** (2026-10-25 and 26, `s-1vcpu-512mb`,
-  Debian 13): the split, `setup.sh` after it, a release on `/srv`, a
-  reboot, the missing mount and a disk resize. Not testable on
-  OrbStack: its machines boot no initramfs of their own.
+- **User data, not a step of `setup.sh`** (decided): the conversion
+  needs the disk before anything is on it, and two reboots. `setup.sh`
+  stays host setup, run after it as on any server, and knows nothing of
+  it.
+- **The whole root, not a data partition beside an ext4 root**
+  (decided 2026-10-26, after building and testing the split): a split
+  fixes the root's size forever, while a bigger plan on DigitalOcean
+  is a bigger disk, so the root could never grow with the server, and
+  with Docker's images on the data side too it would hold only the
+  system. One filesystem has no size to choose, no mounts to order and
+  nothing to fail when a partition is missing. What the conversion
+  risks is a new, empty server's: one that fails is created again.
+- **`/boot` stays the image's ext4, kept in place:** GRUB never reads
+  XFS (its BIOS core carries only the modules for `/boot`'s filesystem,
+  and `mkfs.xfs`'s defaults, like `nrext64`, may be newer than a
+  GRUB), and the ext4 keeps its UUID, which GRUB's EFI config and the
+  boot-1 core search by. Its files move to its top, with `boot -> .`,
+  so `/boot/grub` and `/grub` are one directory: the image's GRUB
+  looks for the first, `grub-install` from the converted server writes
+  the second.
+- **DigitalOcean wants the root as partition 1:** creating a Droplet
+  from a snapshot of a server whose root was partition 2 failed, the
+  Droplet gone during creation (`doctl`'s 404, nothing in the panel),
+  live or powered off, at any size; a snapshot of a stock server
+  worked, and one with the root renumbered to 1 did (found 2026-10-26).
+  Its own XFS image (Rocky Linux) has the root as partition 1 too. GPT
+  numbers are independent of where a partition lies, so the XFS takes
+  number 1 at the end of the disk, and the ext4 another.
+- **GRUB's BIOS core finds `/boot` by partition number** (`(,gpt1)`, as
+  `grub-install` writes it): renumbering without reinstalling GRUB left
+  a server that never booted (found 2026-10-26). `grub-install` cannot
+  run in the initramfs, and run before the renumbering it writes the
+  old number. So boot 1 installs a core of its own (`grub-mkimage`
+  with a `search.fs_uuid` config, `grub-bios-setup`), valid before and
+  after, and the last boot reinstalls GRUB as its updates do
+  (`dpkg-reconfigure grub-cloud-amd64`: by number again, the new one).
+  The EFI config was by UUID already.
+- **The XFS takes the root's PARTUUID** in the same write as its
+  number: the kernel's `root=PARTUUID=` (the image's
+  `grub.d/10_cloud.cfg`), GRUB's config and the root's fstab line keep
+  working unchanged, and every `update-grub` after writes the same.
+- **State is the XFS partition's GPT name:** `devopsy-new` (copy),
+  `devopsy-copied` (strip the ext4), `devopsy-stripped` (renumber),
+  `devopsy-root` (done, nothing ever again), the ext4 `devopsy-boot`.
+  The ext4 stays the root until the renumbering, so a failure up to the
+  copy boots on as before; from the strip on the ext4 boots no system,
+  and the next boot resumes in the initramfs before it needs one.
+- **The strip never leaves GRUB without `/boot/grub`:** `/boot`'s files
+  are hard-linked to the top (`cp -al`), then one rename swaps the
+  directory for the link (`mv -T --exchange`, renameat2's
+  `RENAME_EXCHANGE`, coreutils 9.5). Without `-T`, `mv --exchange`
+  moves the link into the directory (found).
+- **The last boot's script waits for `devopsy-root`,** not for an XFS
+  root: an earlier version ran on an XFS root with its last phase left
+  (found).
+- **Debian 13's initramfs has klibc's tools, no busybox:** the hook
+  copies GNU's and util-linux's into `/devopsy/bin`.
+- **Growing is the image's own:** growroot grows the ext4 over the
+  disk on boot 1 (phase 1 shrinks it), and the conversion's boot
+  reboots before growroot runs. After it the XFS is the last partition,
+  so growroot, cloud-init's `resizefs` and systemd's growfs (fstab's
+  `x-systemd.growfs`, kept) grow it after a resize or onto a larger
+  Droplet from a snapshot.
+- **fstab:** the root `xfs defaults` (no `discard`: `fstrim.timer` is
+  on), `/boot` by its UUID, `nofail` with an immutable mount point, so
+  a missing `/boot` boots on and an update writing there fails.
+- **Measured** (2026-10-26, `s-1vcpu-512mb`, ext4 `/boot` against the
+  XFS root, the same disk): unpacking 34,000 files (754 MB) 6.3 to 7.0
+  s against 7.1 to 7.8, deleting them 1.0 s against 2.5, random 16k
+  writes 19.7k against 23.8k IOPS; a reflink copy of a 650 MB database
+  0.03 s. Swap on a `fallocate`d file works (`setup.sh`'s swap step).
+- **Tested on DigitalOcean only** (2026-10-26, Debian 13): the
+  conversion at 10 and 25 GB; reboots; a kernel upgrade, GRUB's
+  packages reinstalled, a kernel removed and an upgrade to forky
+  (Debian 14: kernel 7.2, GRUB 2.14), each with reboots; `setup.sh`, a
+  release with a database in a named volume and an owned `mnt` entry,
+  reflink copies of both; a live snapshot onto a new 25 GB Droplet
+  (grown, the services and data back) and a rebuild from it; a disk
+  resize. Not testable on OrbStack: its machines boot no initramfs of
+  their own.
 
 ## Checks
 
@@ -162,21 +199,28 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable setup.sh
 The scripts inside `cloud-init.yaml`, extracted first:
 
 ```sh
-for p in /etc/initramfs-tools/hooks/devopsy-data \
-  /etc/initramfs-tools/scripts/local-premount/devopsy-data \
-  /var/lib/cloud/scripts/per-boot/devopsy-data-grow; do
+for p in /etc/initramfs-tools/hooks/devopsy-xfs \
+  /etc/initramfs-tools/scripts/local-premount/devopsy-xfs \
+  /var/lib/cloud/scripts/per-boot/devopsy-xfs-finish; do
   docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 \
     ".write_files[] | select(.path == \"$p\") | .content" cloud-init.yaml \
     >"/tmp/$(basename "$(dirname "$p")")-$(basename "$p")"
 done
+{ echo '#!/bin/sh'; docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 '.runcmd[0]' cloud-init.yaml; } >/tmp/runcmd
 docker run --rm -v /tmp:/mnt -w /mnt koalaman/shellcheck:stable -s sh -S warning \
-  hooks-devopsy-data local-premount-devopsy-data per-boot-devopsy-data-grow
+  hooks-devopsy-xfs local-premount-devopsy-xfs per-boot-devopsy-xfs-finish runcmd
 ```
 
-`cloud-init.yaml` itself on a server it set up: `cloud-init schema
---system`. It is tested on a cloud server (above, "The data partition"),
-the smallest size, deleted afterwards, with a small `ROOT_GB` so the
-data partition gets a few GiB of a 10 GB disk.
+`cloud-init.yaml` itself, with Debian 13's cloud-init:
+
+```sh
+docker run --rm -v "$PWD:/w:ro" debian:trixie sh -c 'apt-get update -qq &&
+  apt-get install -y -qq --no-install-recommends cloud-init >/dev/null &&
+  cloud-init schema -c /w/cloud-init.yaml'
+```
+
+It is tested on a cloud server (above, "The XFS root"), the smallest
+size, deleted afterwards.
 
 Test on a real Debian 13 machine, for example an OrbStack machine
 (`orb create debian:trixie devopsy-test`). Run the script with test

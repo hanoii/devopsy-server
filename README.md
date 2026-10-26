@@ -34,60 +34,64 @@ Rerun the same command at any time: every step is idempotent, and a rerun
 upgrades what the script installed (its Debian packages, Docker and
 devopsy). It leaves no command on the server.
 
-On a new server, `cloud-init.yaml` can first split its disk into a
-system root and a data partition (see "A data partition" below).
+On a new server, `cloud-init.yaml` can first convert its root to XFS
+(see "An XFS root" below).
 
-## A data partition
+## An XFS root
 
-`cloud-init.yaml` is user data for a new server. It splits its one disk
-into an ext4 root of a fixed size, for the system and Docker's images,
-logs and build cache, and an XFS partition with the rest, mounted on
-`/srv`, for what devopsy keeps: releases with their data, and Docker's
-named volumes. Data then grows on its own when the disk does, and the
-system can never fill it, nor the other way round. XFS copies files
-with reflinks: copies of the data on `/srv`, its named volumes
-included, take seconds whatever their size, sharing blocks until
-written.
+`cloud-init.yaml` is user data for a new server. On its first boots it
+converts the root from ext4 to XFS, which copies files with reflinks:
+copies of data on the server (an environment's, a database included)
+take seconds whatever their size, sharing blocks until written.
+Everything stays on one filesystem the size of the disk (the system,
+releases, Docker's images and volumes), and a disk resize grows it.
 
 Tried on DigitalOcean's Debian 13 image. Only for a new server: the
-split runs once, at its first boots, before anything is on the disk.
+conversion runs once, at its first boots, before anything is on the
+disk.
 
-1. Set `ROOT_GB` in the file: 20 for a server that pulls its images, 25
-   or more for one that builds them. The root cannot grow later; one
-   that runs short is a rebuild with a larger value.
-2. Create the server with the file as its user data: in DigitalOcean's
-   control panel, "Advanced Options", "Add Initialization scripts",
-   pasted whole; or `doctl compute droplet create ... --user-data-file
-   cloud-init.yaml`.
-3. It reboots twice on its own, about two minutes, then is ready. Check
-   with `findmnt /srv` (XFS) and `lsblk`.
-4. Run `setup.sh` with `DEVOPSY_ROOT=/srv/devopsy`.
+1. Create the server with the file as its user data, nothing to edit:
+   in DigitalOcean's control panel, "Advanced Options", "Add
+   Initialization scripts", pasted whole; or `doctl compute droplet
+   create ... --user-data-file cloud-init.yaml`.
+2. It reboots twice on its own, about three minutes, then is ready:
+   `findmnt /` says `xfs`.
+3. Run `setup.sh` as usual.
 
 What the server gets:
 
 ```
-/                          ext4, ROOT_GB GiB: the system, /home,
-                           /var/lib/docker (images, layers, logs)
-/srv                       XFS, the rest of the disk
-  devopsy/                 releases (DEVOPSY_ROOT): code, shared/.env,
-                           shared/mnt
-  docker-volumes/          bound onto /var/lib/docker/volumes
+vda1   /           XFS, the rest of the disk: everything
+vda2   /boot       ext4, 2 GiB: the image's own root, kept for GRUB
+vda14              BIOS boot, the image's
+vda15  /boot/efi   EFI system, the image's
 ```
 
-- **Nothing lands on the root disk without `/srv`:** the empty mount
-  points `/srv` and `/var/lib/docker/volumes` are immutable
-  (`chattr +i`), and Docker starts only with both mounted
-  (`RequiresMountsFor` in `docker.service.d/devopsy-data.conf`).
-- **A disk resize grows the data:** power off, resize the disk (on
-  DigitalOcean a resize with the disk, permanent), power on. The first
-  boot grows the data partition and its XFS; the root stays as it is.
-- **A rebuild** from an image wipes both partitions and runs the split
-  again.
-- **The split's own boot shows only on the serial console** (the
-  provider's recovery console): it runs before the root is mounted,
-  and reboots before anything is logged. If anything is not as it
-  expects (a root that is not ext4, a partition after it, less than 1
-  GiB left for data), it does nothing and the server boots unsplit.
+- **Updates work as on any Debian:** kernel, GRUB and release upgrades
+  write `/boot`, which GRUB reads as before; it never reads XFS. Tried:
+  a kernel upgrade, GRUB's packages reinstalled (GRUB installs itself
+  again then), a kernel removed and an upgrade to the next Debian
+  release, each followed by reboots.
+- **Without `/boot` the server still boots** (`nofail`), reachable over
+  SSH, and an update fails instead of writing where GRUB never looks:
+  `/boot`'s mount point on the XFS is immutable (`chattr +i`).
+- **A disk resize grows the root:** power off, resize with the disk (on
+  DigitalOcean permanent), power on.
+- **The provider's snapshots and backups restore as on any server,**
+  onto a new server (a larger one grows to its disk) or by a rebuild:
+  DigitalOcean expects the root as partition 1, as the conversion
+  leaves it.
+- **The conversion's own boot shows only on the serial console** (the
+  provider's recovery console, lines starting `devopsy-xfs:`): it runs
+  before the root is mounted. If anything is not as it expects (a root
+  that is not ext4, a partition after it, under 4 GiB left for XFS),
+  it does nothing and the server boots on ext4, as created; a failure
+  up to the copy into XFS also boots on ext4. Past the copy, a cut boot
+  resumes where it was on the next one.
+- **XFS against ext4:** about the same for a site. On a small
+  DigitalOcean server, random writes like a database's were 20% faster,
+  unpacking 34,000 small files 10% slower and deleting them 2.5 s
+  against 1.
 
 ## Steps
 
@@ -299,8 +303,7 @@ for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
   `DEVOPSY_ROOT=/srv`, and add `RequiresMountsFor=/srv` to a
   `docker.service.d` drop-in, so containers never start before it. The
   home directory, with `.ssh`, stays off the volume. Docker's named
-  volumes stay on the root disk unless bound onto the volume too, as
-  the data partition does (`cloud-init.yaml`).
+  volumes stay on the root disk.
 - **Docker networks.** Docker's default pools allow about 30 networks per
   host, and every project environment takes at least one. Cut into /24s,
   the same ranges give thousands. Existing networks keep their size until
