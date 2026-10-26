@@ -131,6 +131,18 @@ goes; here are the decisions and the findings.
   system. One filesystem has no size to choose, no mounts to order and
   nothing to fail when a partition is missing. What the conversion
   risks is a new, empty server's: one that fails is created again.
+- **Boot 1 refuses what was not tried** (decided 2026-10-26, the user
+  asked how the layout check holds up when an image changes): a release
+  other than Debian 13 or Ubuntu 26.04 (as `setup.sh`'s `preflight`;
+  point releases keep `VERSION_ID`), a kernel `root=` other than
+  `UUID=`, `PARTUUID=` or a device (the XFS takes those over, a
+  `LABEL=` would find nothing after the conversion: the convert script
+  refuses it too), and an initramfs without the conversion or XFS's
+  driver once built (`lsinitrd`, else `lsinitramfs`): one from another
+  generator would never convert, and the log would wait for it on every
+  boot. Refused, nothing of the conversion is left and the server stays
+  ext4. A new release is tried on DigitalOcean, then added to both
+  lists.
 - **By layout, not by distribution:** boot 1 notes whether `/boot` is
   its own mount (`MODE`, `/etc/devopsy-xfs.conf`): Debian 13's image
   has `/boot` in the root (`boot-in-root`), Ubuntu 26.04's on a

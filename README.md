@@ -95,6 +95,11 @@ grows over its space.
   onto a new server (a larger one grows to its disk) or by a rebuild:
   DigitalOcean expects the root as partition 1, as the conversion
   leaves it.
+- **Anything else is refused, and the server stays as created** (ext4,
+  its log saying why, ending "not converting"): another release than
+  Debian 13 or Ubuntu 26.04 (each is tried before it is added), a
+  kernel that finds the root by anything but UUID, PARTUUID or device,
+  an initramfs that would not carry the conversion or XFS's driver.
 - **The conversion's own boot shows only on the serial console** (the
   provider's recovery console, lines starting `devopsy-xfs:`): it runs
   before the root is mounted. If anything is not as it expects (a root

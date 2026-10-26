@@ -58,10 +58,11 @@ write_files:
       say() { echo "devopsy-xfs: $*" >/dev/kmsg 2>/dev/null || echo "devopsy-xfs: $*"; }
       spec=
       for a in $(cat /proc/cmdline); do case $a in root=*) spec=${a#root=} ;; esac; done
+      # The forms the XFS takes over; a LABEL= would no longer find it.
       case $spec in
         /dev/*) root=$spec ;;
-        ?*) root=$(blkid -l -o device -t "$spec") ;;
-        *) root= ;;
+        UUID=?* | PARTUUID=?*) root=$(blkid -l -o device -t "$spec") ;;
+        *) say "root=$spec is not by UUID, PARTUUID or device, not converting"; exit 0 ;;
       esac
       [ -b "$root" ] || { say "no root device ($spec)"; exit 0; }
       sys=/sys/class/block/${root##*/}
@@ -332,10 +333,33 @@ write_files:
       say "done, the root is XFS"
 runcmd:
   - |
-    # The layout, then (with /boot in the root) the GRUB core that finds
-    # the ext4 by UUID, then the conversion into the initramfs; any of it
-    # failing, nothing of it is left to run later.
+    # The release and the kernel's root= checked, the layout, then (with
+    # /boot in the root) the GRUB core that finds the ext4 by UUID, then
+    # the conversion into the initramfs, checked there; any of it failing,
+    # nothing of it is left to run later.
     say() { echo "$(date -u '+%F %T') devopsy-xfs: $*"; }
+    # Only what was tried: a new release is tried before it is added.
+    supported() {
+      (. /etc/os-release && case ${ID:-}:${VERSION_ID:-} in debian:13 | ubuntu:26.04) ;; *)
+        say "${PRETTY_NAME:-this system} is not Debian 13 or Ubuntu 26.04" >&2; exit 1 ;; esac)
+    }
+    # The forms the XFS takes over (the convert script refuses others too).
+    root_spec() {
+      spec=$(tr ' ' '\n' </proc/cmdline | sed -n 's/^root=//p')
+      case $spec in
+        /dev/* | UUID=?* | PARTUUID=?*) ;;
+        *) say "the kernel finds the root by root=$spec, not by UUID, PARTUUID or device" >&2; return 1 ;;
+      esac
+    }
+    # The conversion and XFS's driver in the initramfs the next boot uses:
+    # an initramfs built otherwise would never run it.
+    in_initramfs() {
+      img=/boot/initrd.img-$(uname -r)
+      if command -v lsinitrd >/dev/null; then list=$(lsinitrd "$img"); else list=$(lsinitramfs "$img"); fi ||
+        { say "cannot list $img" >&2; return 1; }
+      echo "$list" | grep -q 'devopsy/convert$' && echo "$list" | grep -q '/xfs\.ko' ||
+        { say "the conversion or XFS's driver is not in $img" >&2; return 1; }
+    }
     mode=boot-in-root
     if mountpoint -q /boot; then mode=boot-separate; fi
     core() {
@@ -345,8 +369,8 @@ runcmd:
           biosdisk part_gpt ext2 search_fs_uuid &&
         /usr/lib/grub/i386-pc/grub-bios-setup -d /boot/grub/i386-pc "$disk"
     }
-    if echo "MODE=$mode" >/etc/devopsy-xfs.conf && { [ "$mode" = boot-separate ] || core; } &&
-      update-initramfs -u; then
+    if supported && root_spec && echo "MODE=$mode" >/etc/devopsy-xfs.conf &&
+      { [ "$mode" = boot-separate ] || core; } && update-initramfs -u && in_initramfs; then
       say "converting on the next boot ($mode)"
     else
       say "not converting" >&2
