@@ -1,7 +1,7 @@
 # devopsy-server
 
-Turns a fresh Debian 13 server into a devopsy host: Docker, a deploy user,
-automatic security upgrades and the
+Turns a fresh Debian 13 or Ubuntu 26.04 server into a devopsy host: Docker,
+a deploy user, automatic security upgrades and the
 [devopsy CLI](https://github.com/hanoii/devopsy-cli). Everything else is
 released onto it with devopsy, starting with
 [Traefik](https://github.com/hanoii/devopsy-template-traefik).
@@ -31,7 +31,7 @@ one again to replace it, or empty (`DEVOPSY_SWAP=`) to go back to its
 default.
 
 Rerun the same command at any time: every step is idempotent, and a rerun
-upgrades what the script installed (its Debian packages, Docker and
+upgrades what the script installed (its apt packages, Docker and
 devopsy). It leaves no command on the server.
 
 On a new server, `cloud-init.yaml` can first convert its root to XFS
@@ -46,7 +46,8 @@ take seconds whatever their size, sharing blocks until written.
 Everything stays on one filesystem the size of the disk (the system,
 releases, Docker's images and volumes), and a disk resize grows it.
 
-Tried on DigitalOcean's Debian 13 image. Only for a new server: the
+Tried on DigitalOcean's Debian 13 and Ubuntu 26.04 images. Only for a
+new server: the
 conversion runs once, at its first boots, before anything is on the
 disk.
 
@@ -60,20 +61,31 @@ disk.
    each line with its time.
 3. Run `setup.sh` as usual.
 
-What the server gets:
+What the server gets, by what the image had:
 
 ```
+Debian 13 (/boot in the root)
 vda1   /           XFS, the rest of the disk: everything
 vda2   /boot       ext4, 2 GiB: the image's own root, kept for GRUB
 vda14              BIOS boot, the image's
 vda15  /boot/efi   EFI system, the image's
+
+Ubuntu 26.04 (/boot on its own partition)
+vda1   /           XFS, the rest of the disk: everything
+vda13  /boot       ext4, the image's
+vda14              BIOS boot, the image's
+vda15  /boot/efi   EFI system, the image's
 ```
 
-- **Updates work as on any Debian:** kernel, GRUB and release upgrades
-  write `/boot`, which GRUB reads as before; it never reads XFS. Tried:
-  a kernel upgrade, GRUB's packages reinstalled (GRUB installs itself
-  again then), a kernel removed and an upgrade to the next Debian
-  release, each followed by reboots.
+On Ubuntu the old root's ext4 goes once the copy is done, and the XFS
+grows over its space.
+
+- **Updates work as on any server of the distribution:** kernel, GRUB
+  and release upgrades write `/boot`, which GRUB reads as before; it
+  never reads XFS. Tried: a kernel upgrade, GRUB's packages reinstalled
+  (GRUB installs itself again then) and a kernel removed, each followed
+  by reboots, on both; on Debian an upgrade to the next release too
+  (Ubuntu 26.04 is offered none yet).
 - **Without `/boot` the server still boots** (`nofail`), reachable over
   SSH, and an update fails instead of writing where GRUB never looks:
   `/boot`'s mount point on the XFS is immutable (`chattr +i`).
@@ -99,9 +111,9 @@ vda15  /boot/efi   EFI system, the image's
 
 | Step       | What it does |
 | ---------- | ------------ |
-| `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, plus `DEVOPSY_APT_PACKAGES`. |
+| `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, on Ubuntu `coreutils-from-gnu` (devopsy's scripts expect GNU's coreutils, which Ubuntu may replace with Rust's), plus `DEVOPSY_APT_PACKAGES`. |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
-| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor (Debian's does; a rerun restarts a daemon that started without it). Rotated logs, `live-restore` and /24 address pools. |
+| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor (Debian's and Ubuntu's do; a rerun restarts a daemon that started without it). Rotated logs, `live-restore` and /24 address pools. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
 | `cli`      | Installs `devopsy` in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`; a rerun upgrades it. |
@@ -112,12 +124,12 @@ vda15  /boot/efi   EFI system, the image's
 | -------------------------- | ------- | - |
 | `DEVOPSY_USER`             | `devopsy` | The deploy user. |
 | `DEVOPSY_SUDO`             | `0`     | `1` gives the deploy user passwordless sudo. |
-| `DEVOPSY_APT_PACKAGES`     |         | Extra Debian packages, space separated, like `htop ncdu`. Removing one from the list does not uninstall it. |
+| `DEVOPSY_APT_PACKAGES`     |         | Extra apt packages, space separated, like `htop ncdu`. Removing one from the list does not uninstall it. |
 | `DEVOPSY_SWAP`             |         | Swap file size, like `2G` (see "Swap" below). |
 | `DEVOPSY_AUTO_REBOOT_TIME` |         | Reboot after upgrades that need it, at this time, like `04:00`. |
 | `DEVOPSY_ADDRESS_POOLS`    | `172.16.0.0/12 192.168.0.0/16` | Ranges Docker cuts into /24 networks, space separated, each /24 or larger. |
 | `DEVOPSY_ROOT`             |         | Where releases live, like `/srv` on a block volume; default the deploy user's home. Written as `releases: root` in the deploy user's `~/.config/devopsy/config.yaml` (devopsy-cli's README, "Release settings"); a file there that devopsy-server did not write is left alone. |
-| `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13. Not saved. |
+| `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13 or Ubuntu 26.04. Not saved. |
 
 Traefik's settings (ACME email, resolvers, the wildcard domain) are
 devopsy-template-traefik's; see its README.
@@ -136,6 +148,8 @@ adopts the result.
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ca-certificates curl git jq openssh-client openssl unattended-upgrades sudo
+# Ubuntu only: GNU's coreutils
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends coreutils-from-gnu
 
 ```
 
@@ -166,13 +180,13 @@ sysctl -p /etc/sysctl.d/90-devopsy-swap.conf
 ### docker
 
 ```sh
-install -d -m 755 /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
-chmod a+r /etc/apt/keyrings/docker.asc
 . /etc/os-release
+install -d -m 755 /etc/apt/keyrings
+curl -fsSL "https://download.docker.com/linux/$ID/gpg" -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
 cat > /etc/apt/sources.list.d/docker.sources <<EOF
 Types: deb
-URIs: https://download.docker.com/linux/debian
+URIs: https://download.docker.com/linux/$ID
 Suites: $VERSION_CODENAME
 Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
@@ -322,7 +336,7 @@ for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
   `docker inspect -f '{{.AppArmorProfile}}' <container>` shows the profile.
   Kernels without AppArmor (some cloud images, OrbStack) run containers
   without it.
-- **Only Debian security updates are automatic.** Docker is upgraded by a
+- **Only the distribution's security updates are automatic.** Docker is upgraded by a
   rerun of setup or `apt upgrade`; `live-restore` keeps containers running
   meanwhile.
 
