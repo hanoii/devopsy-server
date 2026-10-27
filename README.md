@@ -22,7 +22,7 @@ Settings are optional environment variables. `--help` lists them with the
 values this server has saved:
 
 ```sh
-curl -fsSL .../setup.sh | DEVOPSY_SWAP=2G DEVOPSY_ROOT=/srv bash
+curl -fsSL .../setup.sh | DEVOPSY_SWAP=2G bash
 curl -fsSL .../setup.sh | bash -s -- --help
 ```
 

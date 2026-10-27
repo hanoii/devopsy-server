@@ -32,7 +32,7 @@ Docker and devopsy.
 
 Settings are environment variables, all optional:
 
-  curl -fsSL ... | DEVOPSY_SWAP=2G DEVOPSY_ROOT=/srv bash
+  curl -fsSL ... | DEVOPSY_SWAP=2G bash
 
   DEVOPSY_USER              The deploy user. Default: devopsy.
   DEVOPSY_ROOT              Where releases live, like /srv on a block
