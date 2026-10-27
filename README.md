@@ -153,8 +153,9 @@ adopts the result.
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ca-certificates curl git jq openssh-client openssl unattended-upgrades sudo
-# Ubuntu only: GNU's coreutils
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends coreutils-from-gnu
+# Ubuntu only: GNU's coreutils, in place of Rust's uutils
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  --allow-remove-essential coreutils-from-gnu coreutils-from-uutils-
 
 ```
 

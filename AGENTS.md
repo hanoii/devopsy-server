@@ -36,7 +36,12 @@ XFS root", "Without the script" (each step by hand: a change to a
   keeps GNU's coreutils the active ones, which devopsy-cli's scripts on
   servers expect (GNU `tail`, `mv -T`): Ubuntu ships Rust's uutils
   beside them and may make them the default (26.04 on DigitalOcean had
-  GNU's, checked 2026-10-26). `NEEDRESTART_SUSPEND=1` on installs keeps
+  GNU's, checked 2026-10-26; OrbStack's 26.04 and a server upgraded
+  from 24.04 have `coreutils-from-uutils` marked manual, checked
+  2026-10-27). The two conflict over the essential `coreutils`, so the
+  base step names the other one for removal (`coreutils-from-uutils-`,
+  `--allow-remove-essential`): a plain install of GNU's failed there,
+  apt keeping the manual one. `NEEDRESTART_SUSPEND=1` on installs keeps
   Ubuntu's needrestart from restarting services and reporting into the
   output. Ubuntu's `sudo` is sudo-rs, which reads `/etc/sudoers.d` too;
   its kernel has AppArmor, applied to containers (`docker-default`).

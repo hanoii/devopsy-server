@@ -166,10 +166,13 @@ step_base() {
   apt-get update -q >/dev/null
   apt_install ca-certificates curl git jq openssh-client openssl unattended-upgrades sudo
   # GNU's coreutils, which devopsy's scripts on the server expect (GNU
-  # tail, mv -T), where Ubuntu may make Rust's uutils the default.
+  # tail, mv -T), where Ubuntu may make Rust's uutils the default. The
+  # two packages provide the essential coreutils and conflict, so apt
+  # swaps them only when told to remove the other one: installed by hand
+  # or by a release upgrade from 24.04, it is never removed otherwise.
   # shellcheck disable=SC1091
   if (. /etc/os-release && [ "${ID:-}" = ubuntu ]); then
-    apt_install coreutils-from-gnu
+    apt_install --allow-remove-essential coreutils-from-gnu coreutils-from-uutils-
   fi
 
   # Extra packages, space separated (checked in validate_settings).
