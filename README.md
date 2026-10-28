@@ -118,7 +118,7 @@ grows over its space.
 | ---------- | ------------ |
 | `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, on Ubuntu `coreutils-from-gnu` (devopsy's scripts expect GNU's coreutils, which Ubuntu may replace with Rust's), plus `DEVOPSY_APT_PACKAGES`. |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
-| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor (Debian's and Ubuntu's do; a rerun restarts a daemon that started without it). Rotated logs, `live-restore` and /24 address pools. |
+| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor (Debian's and Ubuntu's do; a rerun restarts a daemon that started without it). Rotated logs, `live-restore` and /24 address pools. Socket buffers of 7.5 MB (`net.core.rmem_max`, `wmem_max`), what a Cloudflare Tunnel's connector asks for. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
 | `cli`      | Installs `devopsy` in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`; a rerun upgrades it. |
@@ -218,11 +218,18 @@ EOF
 systemctl restart docker
 systemctl enable docker
 
+printf 'net.core.rmem_max = 7500000\nnet.core.wmem_max = 7500000\n' > /etc/sysctl.d/90-devopsy-net.conf
+sysctl -p /etc/sysctl.d/90-devopsy-net.conf
+
 ```
 
 Rotated logs keep containers from filling the disk, and `live-restore`
 keeps them running while Docker upgrades. Address pools: see "Docker
-networks" below.
+networks" below. The socket buffers are for QUIC: a Cloudflare Tunnel's
+connector (`cloudflared`) asks the kernel for 7.5 MB and runs with
+smaller buffers, warning, where the default maximum is about 200 KB; the
+setting is the host's, containers get it, and it changes nothing without
+a tunnel.
 
 ### user
 

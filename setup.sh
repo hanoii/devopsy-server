@@ -258,6 +258,18 @@ EOF
   fi
   systemctl enable --now docker >/dev/null 2>&1
   docker_apparmor
+
+  # Socket buffers for QUIC: net.core is the host kernel's, not a network
+  # namespace's, so a container gets what the host allows. cloudflared (a
+  # Cloudflare Tunnel's connector, quic-go) asks for 7.5 MB and warns, then
+  # runs with smaller buffers, where the maximum is the kernel's 208 KB
+  # default. Harmless without a tunnel.
+  if write_file /etc/sysctl.d/90-devopsy-net.conf <<'EOF'; then
+net.core.rmem_max = 7500000
+net.core.wmem_max = 7500000
+EOF
+    sysctl -q -p /etc/sysctl.d/90-devopsy-net.conf
+  fi
 }
 
 # Docker (containerd's check, behind a sync.Once) looks for AppArmor once

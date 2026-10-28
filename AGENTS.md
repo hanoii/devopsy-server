@@ -84,7 +84,20 @@ XFS root", "Without the script" (each step by hand: a change to a
   `daemon.json` goes there too. Except `apparmor`, never mirrored: those
   servers are privileged Docker-in-Docker, and on a host with AppArmor
   (GitHub's Ubuntu runners included) it would start confining the inner
-  containers, changing what the suite tests.
+  containers, changing what the suite tests. Nor the socket buffers
+  (below): `net.core` is the host's, which a container cannot set.
+- **The `docker` step raises the socket buffers to 7.5 MB**
+  (`/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and
+  `wmem_max`), for QUIC: a Cloudflare Tunnel's connector (`cloudflared`,
+  quic-go) asks for that and otherwise warns and runs with the kernel's
+  default maximum, 208 KB. Why here and not a setting: `net.core` is the
+  host kernel's, not a network namespace's, so it is what every container
+  gets from the host, like `daemon.json` and AppArmor; it changes nothing
+  without a tunnel, and a setting nobody would turn off is noise. Why not
+  the Traefik or the tunnel template: a project cannot set a host sysctl
+  (compose's `sysctls:` are the container's namespace, and `net.core` is
+  not among them). Written with `write_file` and applied with `sysctl -p`
+  only when it changed, as the swap step's `vm.swappiness`.
 - **Docker looks for AppArmor once per daemon** (containerd's
   `HostSupports`, behind a `sync.Once`: securityfs, the kernel's
   `enabled` flag, `/sbin/apparmor_parser`), so installing `apparmor`
