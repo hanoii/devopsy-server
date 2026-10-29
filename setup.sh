@@ -199,9 +199,10 @@ step_swap() {
     swapon /swapfile
     grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
   fi
-  if echo 'vm.swappiness = 10' | write_file /etc/sysctl.d/90-devopsy-swap.conf; then
-    sysctl -q -p /etc/sysctl.d/90-devopsy-swap.conf
-  fi
+  # Applied on every run, written or not: a first run that failed here
+  # left the file, and the next would skip it.
+  echo 'vm.swappiness = 10' | write_file /etc/sysctl.d/90-devopsy-swap.conf || true
+  sysctl -q -p /etc/sysctl.d/90-devopsy-swap.conf
 }
 
 step_docker() {
@@ -258,6 +259,18 @@ EOF
   fi
   systemctl enable --now docker >/dev/null 2>&1
   docker_apparmor
+
+  # Socket buffers for QUIC: net.core is the host kernel's, not a network
+  # namespace's, so a container gets what the host allows. cloudflared (a
+  # Cloudflare Tunnel's connector, quic-go) asks for 7.5 MB and warns, then
+  # runs with smaller buffers, where the maximum is the kernel's 208 KB
+  # default. Harmless without a tunnel.
+  # Applied on every run, as swap's.
+  write_file /etc/sysctl.d/90-devopsy-net.conf <<'EOF' || true
+net.core.rmem_max = 7500000
+net.core.wmem_max = 7500000
+EOF
+  sysctl -q -p /etc/sysctl.d/90-devopsy-net.conf
 }
 
 # Docker (containerd's check, behind a sync.Once) looks for AppArmor once

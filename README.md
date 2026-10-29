@@ -118,7 +118,7 @@ grows over its space.
 | ---------- | ------------ |
 | `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, on Ubuntu `coreutils-from-gnu` (devopsy's scripts expect GNU's coreutils, which Ubuntu may replace with Rust's), plus `DEVOPSY_APT_PACKAGES`. |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
-| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor (Debian's and Ubuntu's do; a rerun restarts a daemon that started without it). Rotated logs, `live-restore` and /24 address pools. |
+| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor (Debian's and Ubuntu's do; a rerun restarts a daemon that started without it). Rotated logs, `live-restore` and /24 address pools. Socket buffers of 7.5 MB (`net.core.rmem_max`, `wmem_max`), what a Cloudflare Tunnel's connector asks for. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
 | `cli`      | Installs `devopsy` in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`; a rerun upgrades it. |
@@ -218,11 +218,18 @@ EOF
 systemctl restart docker
 systemctl enable docker
 
+printf 'net.core.rmem_max = 7500000\nnet.core.wmem_max = 7500000\n' > /etc/sysctl.d/90-devopsy-net.conf
+sysctl -p /etc/sysctl.d/90-devopsy-net.conf
+
 ```
 
 Rotated logs keep containers from filling the disk, and `live-restore`
 keeps them running while Docker upgrades. Address pools: see "Docker
-networks" below.
+networks" below. The socket buffers are for QUIC: a Cloudflare Tunnel's
+connector (`cloudflared`) asks the kernel for 7.5 MB and runs with
+smaller buffers, warning, where the default maximum is about 200 KB; the
+setting is the host's, containers get it, and it changes nothing without
+a tunnel.
 
 ### user
 
@@ -309,17 +316,82 @@ for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
 
 ## Things to know
 
-- **The deploy user is effectively root:** the `docker` group allows root
-  access through Docker. Treat its keys accordingly.
-- **The deploy user owns `devopsy`,** so `devopsy @<server> --upgrade`
-  upgrades it from your machine, without root (`--upgrade vX.Y.Z` for a
-  given release). A rerun of setup upgrades it to the latest. Commands
-  refuse a server whose devopsy is too old for yours, and say so.
-- **Firewall: your provider's,** allowing only SSH, 80 and 443. A host
-  firewall like ufw would not help: Docker opens published ports past it.
-  Only Traefik publishes ports; publish anything else on `127.0.0.1` and
+What a devopsy server is protected by, and what stays yours. This is the
+host's half; what Cloudflare's edge covers for sites served through a
+tunnel, and what it does not, is the Traefik template's README, ["Behind
+a Cloudflare
+Tunnel"](https://github.com/hanoii/devopsy-template-traefik#behind-a-cloudflare-tunnel).
+
+- **The firewall is your provider's.** Open inbound only what the
+  server serves: SSH; 80 and 443 only for sites served directly, so on a
+  server whose sites all go through a Cloudflare Tunnel, SSH alone; 53,
+  UDP and TCP, only if the server runs the Traefik template's acme-dns.
+  A tunnel connects out, to port 7844 (UDP for QUIC, else TCP), which
+  providers' firewalls allow by default. A host firewall like ufw would
+  not help: Docker opens published ports past it. Only Traefik publishes
+  ports (and acme-dns, with it); publish anything else on `127.0.0.1` and
   reach it through an SSH tunnel.
-- **SSH is left alone:** set it up as your provider does, with key login.
+- **SSH is left alone, and whoever has a key has the server.** `setup.sh`
+  never changes the SSH server: set it up as your provider does, with key
+  login only, and check it (`sshd -T | grep -i passwordauthentication`
+  says `no`). The deploy user is in the `docker` group, which is root
+  through Docker, and it got root's authorized keys at setup. From then
+  on `devopsy @<server> --ssh-keys` lists, adds and removes its keys from
+  your machine; a machine's key (CI) gets `add --restricted`, which
+  allows commands only, no shell (devopsy-cli's README, "Keys on a
+  server"). Nothing on the server knows your repository: releases are
+  pushed over SSH, and nothing listens for webhooks.
+- **The distribution's security updates install themselves,** daily
+  (unattended-upgrades). A kernel update waits for a reboot by hand
+  unless `DEVOPSY_AUTO_REBOOT_TIME` is set. Docker is upgraded by a rerun
+  of setup or `apt upgrade`, with `live-restore` keeping containers
+  running meanwhile. The deploy user owns `devopsy`, so
+  `devopsy @<server> --upgrade` upgrades it from your machine, without
+  root (`--upgrade vX.Y.Z` for a given release); a rerun of setup
+  upgrades it to the latest. Commands refuse a server whose devopsy is
+  too old for yours, and say so.
+- **Containers run without privilege, by the templates' rules.** Every
+  service in the devopsy templates runs as a fixed non-root UID (apps as
+  10001, shared by all projects; never 1000, the deploy user's), with a
+  read-only root filesystem, every capability dropped (one added back
+  only with a stated reason) and `no-new-privileges`; the data a service
+  writes is its own directory under `mnt`, given to its UID by devopsy.
+  Docker confines them with its `docker-default` AppArmor profile where
+  the kernel has AppArmor (Debian's and Ubuntu's do; some cloud kernels
+  and OrbStack do not; `docker inspect -f '{{.AppArmorProfile}}'
+  <container>` shows it; a server set up before the script installed
+  `apparmor` gets a Docker restart on its next rerun, said, and running
+  containers stay unconfined until they next start). These are the
+  templates' conventions, not something devopsy enforces: a project of
+  your own decides for itself. Projects on one server trust each other
+  (they share the `traefik` network, and anyone in the `docker` group is
+  root); separation between clients means separate servers.
+- **Data and secrets are the server's until you copy them off.**
+  `devopsy @<target> --snapshot` takes an environment's data, code and
+  the images it ran as one consistent copy; keep them on another disk with the
+  server's `snapshots: root` (the deploy user's
+  `~/.config/devopsy/config.yaml`; with `DEVOPSY_ROOT` set, that file is
+  setup's while its first line says so, so drop that line before adding
+  to it and set `releases: root` yourself), or send one off the server
+  (`--snapshots export <id> | ...`). A snapshot carries the environment's
+  `shared/.env`, where its secrets live (a database password a release
+  generated no longer matches the database without it); without
+  snapshots, back up `shared/.env`, `shared/mnt` (databases as dumps)
+  and `.devopsy-data-images` beside them. Your provider's disk backups
+  restore the whole server as on any other, the XFS root included.
+- **An environment nobody releases gets no fixes.** Images float on
+  their series (`mariadb:11.8`, `traefik:v3.7`) and are pulled again
+  only by a release, so an environment left alone for weeks runs what it
+  pulled last: release each, Traefik included, on a schedule from CI
+  with the restricted key (devopsy-cli's README, "Environments nobody
+  releases").
+- **What stays yours:** the private keys (on laptops and in CI's
+  protected variables), the provider's and Cloudflare's accounts (second
+  factor on both: one holds the disks, the other DNS and the tunnel), a
+  tunnel's token (it runs the tunnel; rotate it from the dashboard), and
+  the applications themselves: devopsy updates nothing in your code, and
+  a site's own bugs are reachable through a tunnel as they are through a
+  port.
 - **A block volume.** Providers mount volumes elsewhere (DigitalOcean:
   `/mnt/<volume>`). Mount it where releases should live, like `/srv`, set
   `DEVOPSY_ROOT=/srv`, and add `RequiresMountsFor=/srv` to a
@@ -332,19 +404,6 @@ for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
   recreated (`devopsy down`, then `up`). Where the server must reach hosts
   in these ranges (a corporate network on `172.16.0.0/12`), set
   `DEVOPSY_ADDRESS_POOLS` to ranges nobody uses.
-- **AppArmor.** Docker applies its `docker-default` profile only where
-  the kernel has AppArmor and `apparmor` is installed, and checks once,
-  when the daemon starts. On a server set up before the script installed
-  `apparmor`, a rerun restarts Docker for it (said in its output), and
-  containers already running stay unconfined until they next start:
-  restarted, or recreated by a release that changes them. `docker info`
-  lists `name=apparmor` under its security options once it applies, and
-  `docker inspect -f '{{.AppArmorProfile}}' <container>` shows the profile.
-  Kernels without AppArmor (some cloud images, OrbStack) run containers
-  without it.
-- **Only the distribution's security updates are automatic.** Docker is upgraded by a
-  rerun of setup or `apt upgrade`; `live-restore` keeps containers running
-  meanwhile.
 
 ## License
 
