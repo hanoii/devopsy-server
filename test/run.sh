@@ -77,7 +77,15 @@ test_one() {
   x cmp -s /root/.ssh/authorized_keys /home/devopsy/.ssh/authorized_keys ||
     fail "root's keys were not copied to devopsy"
   x runuser -u devopsy -- devopsy --version >/dev/null || fail "devopsy does not run as devopsy"
-  [ "$(x sysctl -n net.core.rmem_max)" = 7500000 ] || fail "net.core.rmem_max is not 7500000"
+  # The file always; the kernel's value only where a container may set
+  # it: GitHub's runners refuse net.core from a container's network
+  # namespace, OrbStack's kernel allows it.
+  x grep -qx 'net.core.rmem_max = 7500000' /etc/sysctl.d/90-devopsy-net.conf ||
+    fail "/etc/sysctl.d/90-devopsy-net.conf lacks the socket buffers"
+  if [ "$(x sysctl -n net.core.rmem_max)" != 7500000 ] &&
+    x sh -c 'cat /proc/sys/net/core/rmem_max >/proc/sys/net/core/rmem_max' 2>/dev/null; then
+    fail "net.core.rmem_max is not 7500000, though the container may set it"
+  fi
   x systemctl is-active --quiet systemd-resolved || fail "systemd-resolved is not running"
   if x ss -Hltun 'sport = :5355' | grep .; then
     fail "LLMNR is still open"
