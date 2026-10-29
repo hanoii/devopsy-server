@@ -116,7 +116,7 @@ grows over its space.
 
 | Step       | What it does |
 | ---------- | ------------ |
-| `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, on Ubuntu `coreutils-from-gnu` (devopsy's scripts expect GNU's coreutils, which Ubuntu may replace with Rust's), plus `DEVOPSY_APT_PACKAGES`. Turns off systemd-resolved's LLMNR and multicast DNS, name lookups on the local network that a server never needs (LLMNR answers on port 5355 of every address by default). |
+| `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, on Ubuntu `coreutils-from-gnu` (devopsy's scripts expect GNU's coreutils, which Ubuntu may replace with Rust's), plus `DEVOPSY_APT_PACKAGES`. Turns off systemd-resolved's LLMNR and multicast DNS, name lookups on the local network that a server never needs (Debian's answers LLMNR on port 5355 of every address). |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
 | `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor (Debian's and Ubuntu's do; a rerun restarts a daemon that started without it). Rotated logs, `live-restore` and /24 address pools. Socket buffers of 7.5 MB (`net.core.rmem_max`, `wmem_max`), what a Cloudflare Tunnel's connector asks for. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
@@ -337,7 +337,7 @@ Tunnel"](https://github.com/hanoii/devopsy-template-traefik#behind-a-cloudflare-
   ports (and acme-dns, with it); publish anything else on `127.0.0.1` and
   reach it through an SSH tunnel. Of the host's own services only SSH
   listens publicly: the `base` step closes systemd-resolved's LLMNR
-  (5355), which Debian and Ubuntu leave open on every address.
+  (5355), which Debian leaves open on every address.
 - **SSH is left alone, and whoever has a key has the server.** `setup.sh`
   never changes the SSH server: set it up as your provider does, with key
   login only, and check it (`sshd -T | grep -i passwordauthentication`
