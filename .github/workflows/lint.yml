@@ -1,0 +1,46 @@
+# shellcheck on the scripts and cloud-init's schema on cloud-init.yaml,
+# on every push: seconds, and nothing outside the repository to fail.
+name: lint
+
+on:
+  push:
+  workflow_dispatch:
+
+# A newer push to a branch cancels the run of the one before.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: setup.sh and test/run.sh
+        run: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable setup.sh test/run.sh
+      - name: The scripts inside cloud-init.yaml
+        run: |
+          mkdir /tmp/ci && i=0
+          for p in $(docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 \
+            '.write_files[] | select(.permissions == "0755") | .path' cloud-init.yaml); do
+            i=$((i + 1))
+            docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 \
+              ".write_files[] | select(.path == \"$p\") | .content" cloud-init.yaml >"/tmp/ci/$i-${p##*/}"
+          done
+          { echo '#!/bin/sh'; docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 '.runcmd[0]' cloud-init.yaml; } >/tmp/ci/runcmd
+          cd /tmp/ci && docker run --rm -v /tmp/ci:/mnt -w /mnt koalaman/shellcheck:stable -S warning -- *
+
+  cloud-init:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: cloud-init.yaml's schema, with Debian 13's cloud-init
+        run: |
+          docker run --rm -v "$PWD:/w:ro" debian:trixie sh -c 'apt-get update -qq &&
+            apt-get install -y -qq --no-install-recommends cloud-init >/dev/null &&
+            cloud-init schema -c /w/cloud-init.yaml'

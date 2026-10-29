@@ -184,8 +184,9 @@ step_base() {
   fi
 
   # Name lookups on the local network, which a server never needs:
-  # systemd-resolved answers LLMNR on port 5355 of every address by
-  # default (Debian's and Ubuntu's), and multicast DNS when turned on.
+  # Debian's systemd-resolved answers LLMNR on port 5355 of every address
+  # (Ubuntu's has it off), and multicast DNS when turned on. Set on both,
+  # should a default change.
   # Written where resolved is missing too, for when it comes. Restarted
   # when written, or while 5355 is still open: a first run that failed
   # after writing is applied by the next, and an applied one restarts
