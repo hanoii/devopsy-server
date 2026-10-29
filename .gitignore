@@ -1,2 +1,4 @@
 # Worktrees for parallel work
 /.worktrees/
+# test/run.sh output
+/test/out/

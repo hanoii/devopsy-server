@@ -87,15 +87,16 @@ XFS root", "Without the script" (each step by hand: a change to a
   containers, changing what the suite tests. Nor the socket buffers
   (below): `net.core` is the host's, which a container cannot set.
 - **The `base` step turns off systemd-resolved's LLMNR and multicast
-  DNS** (`/etc/systemd/resolved.conf.d/90-devopsy.conf`): Debian's and
-  Ubuntu's resolved answer LLMNR on port 5355 of every address, the one
-  host service but SSH listening publicly (found on a DigitalOcean
-  server, 2026-10-29), and a server never resolves names on its local
-  network. Not a setting, as the socket buffers below. Written where
+  DNS** (`/etc/systemd/resolved.conf.d/90-devopsy.conf`): Debian 13's
+  resolved answers LLMNR on port 5355 of every address, the one host
+  service but SSH listening publicly (found on a DigitalOcean server,
+  2026-10-29), and a server never resolves names on its local network.
+  Ubuntu 26.04's has LLMNR off already (`resolvectl status`: `-LLMNR`);
+  set on both, should a default change. Not a setting, as the socket buffers below. Written where
   resolved is missing or masked (OrbStack) too, for when it comes;
   resolved restarts when the file was written, or while 5355 is still
   open (a first run cut after writing), so a rerun restarts nothing.
-  Tested on OrbStack with resolved unmasked.
+  `test/run.sh` checks it (below).
 - **The `docker` step raises the socket buffers to 7.5 MB**
   (`/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and
   `wmem_max`), for QUIC: a Cloudflare Tunnel's connector (`cloudflared`,
@@ -284,7 +285,7 @@ goes; here are the decisions and the findings.
 ## Checks
 
 ```sh
-docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable setup.sh
+docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable setup.sh test/run.sh
 ```
 
 The scripts inside `cloud-init.yaml`, extracted first:
@@ -312,11 +313,34 @@ docker run --rm -v "$PWD:/w:ro" debian:trixie sh -c 'apt-get update -qq &&
 It is tested on a cloud server (above, "The XFS root"), the smallest
 size, deleted afterwards.
 
-Test on a real Debian 13 or Ubuntu 26.04 machine, for example an
-OrbStack machine (`orb create debian:trixie devopsy-test`, `orb create
-ubuntu:resolute devopsy-test`). Run the script with test
-settings, run it again without them to check idempotency, saved
-settings and `--help`, then `orb delete -f devopsy-test`.
+`test/run.sh` runs `setup.sh` twice on Debian 13 and Ubuntu 26.04 at
+once, each in a privileged container with systemd as its first process
+and its own Docker (`test/Dockerfile`, systemd-resolved added as cloud
+images have it), and checks what the first run set up (Docker, the
+deploy user and its keys, devopsy, the socket buffers, LLMNR closed:
+open before on Debian, so the check means something) and that the
+second wrote, created and restarted nothing. About a minute locally;
+`test/run.sh ubuntu:26.04` runs one. A new check goes there, and a new
+supported release is a line of its default list and of the workflow's
+matrix. What it cannot show: AppArmor (the container shares the host's
+kernel: on a kernel with AppArmor, Docker inside loads its profile
+there), swap (`DEVOPSY_SWAP` stays empty: `swapon` would act on the
+host), `--help` and saved settings by hand, and the XFS conversion
+(above). The socket buffers it sets are the host's.
+
+CI (`.github/workflows/`): `lint` (the shellcheck and schema checks
+above) on every push; `setup` (`test/run.sh`, one job per distribution)
+on a push that changes `setup.sh` or the test, weekly (Docker's
+repository, the distributions' packages and defaults and devopsy's
+installer change without a commit here) and on demand. A newer push to
+a branch cancels the run before it (`concurrency`). Free: the
+repository is public.
+
+For what the container cannot show, a real machine: an OrbStack one
+(`orb create debian:trixie devopsy-test`, `orb create ubuntu:resolute
+devopsy-test`; it masks systemd-resolved) or a cloud server. Run the
+script with test settings, again without them, check `--help`, then
+`orb delete -f devopsy-test`.
 
 ## Commits
 

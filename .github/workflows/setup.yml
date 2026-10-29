@@ -1,0 +1,39 @@
+# setup.sh run twice on each distribution it supports (test/run.sh), the
+# two at once as jobs: when setup.sh or the test changes, weekly, for
+# what changes without a commit here (Docker's repository, the
+# distributions' packages and defaults, devopsy's installer), and on
+# demand. GitHub turns a schedule off after 60 days without a commit.
+name: setup
+
+on:
+  push:
+    paths:
+      - setup.sh
+      - test/**
+      - .github/workflows/setup.yml
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+# A newer push to a branch cancels the run of the one before.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    strategy:
+      fail-fast: false
+      matrix:
+        base: [debian:trixie, ubuntu:26.04]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: test/run.sh ${{ matrix.base }}
+      - name: The whole log
+        if: failure()
+        run: cat test/out/*.log
