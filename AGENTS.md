@@ -175,9 +175,10 @@ goes; here are the decisions and the findings.
   ext4. A new release is tried on DigitalOcean, then added to both
   lists.
 - **By layout, not by distribution:** boot 1 notes whether `/boot` is
-  its own mount (`MODE`, `/etc/devopsy-xfs.conf`): Debian 13's image
-  has `/boot` in the root (`boot-in-root`), Ubuntu 26.04's on a
-  partition of its own (`boot-separate`). One script converts both
+  its own mount (`MODE`, `/etc/devopsy-xfs.conf`): DigitalOcean's
+  Debian 13 has `/boot` in the root (`boot-in-root`), its Ubuntu 26.04
+  on a partition of its own (`boot-separate`); Vultr's both in the
+  root. One script converts both
   (`/usr/local/lib/devopsy-xfs/convert`), run from the initramfs by
   whichever builds it: initramfs-tools' `local-premount` on Debian,
   dracut's `pre-mount` on Ubuntu, both through `update-initramfs`
@@ -265,7 +266,56 @@ goes; here are the decisions and the findings.
   s against 7.1 to 7.8, deleting them 1.0 s against 2.5, random 16k
   writes 19.7k against 23.8k IOPS; a reflink copy of a 650 MB database
   0.03 s. Swap on a `fallocate`d file works (`setup.sh`'s swap step).
-- **Tested on DigitalOcean only** (2026-10-26). Ubuntu 26.04 (kernel
+- **Vultr's images differ** (2026-10-29, `vhp-2c-2gb-amd`, 60 GB):
+  EFI only (no BIOS boot partition, `grub-efi-amd64` alone), `/boot` in
+  the root on both releases, the kernel's `root=UUID=` the ext4's
+  filesystem UUID, a `/swapfile` from Vultr's vendor data (100 MB per
+  GB of root, once per instance) and roots larger than 2 GiB. So boot
+  1 installs the BIOS core only where `/boot/grub/i386-pc` is (the EFI
+  config finds `/boot` by the filesystem UUID, which the ext4 keeps);
+  the kernel finds the root by PARTUUID through a drop-in
+  (`/etc/default/grub.d/90-devopsy-xfs.cfg`: `GRUB_DISABLE_LINUX_UUID`,
+  `GRUB_DISABLE_LINUX_PARTUUID=false`), since the ext4 keeps the UUID
+  it was found by, and the last boot removes it before its
+  `update-grub` (back to `root=UUID=`, the XFS's); swap files on the
+  root go last, after every check, and the last boot makes them again,
+  their fstab lines kept. `/boot` is `resize2fs -P`'s minimum in whole
+  GiB, at least 2: 5 and 6 GiB there, no margin of our own (a half GiB
+  made DigitalOcean's 3). The fstab rewrite skips comments (Debian's
+  installer leaves `# / was on /dev/vda2 during installation`, which
+  the awk took for the root's line) and names the XFS by its own UUID
+  where the root's line named the ext4's.
+- **`kho=off` on the conversion's boots:** Ubuntu 26.04's kernel (7.0)
+  has Kexec HandOver on by default (`CONFIG_KEXEC_HANDOVER_ENABLE_DEFAULT`),
+  and marks its scratch memory CMA, for movable pages only: 626
+  pageblocks, 1.25 of 2 GiB on Vultr (`/proc/pagetypeinfo`; `CmaTotal`
+  0, `CmaFree` 830 MB once booted). In the initramfs the copy's kernel
+  memory (slab, some 400 MB left) ran out: the OOM killer took `cp` and
+  the hook, and once the kernel panicked "deadlocked on memory" and
+  stayed there. With `kho=off` no CMA block is left (checked). The same
+  drop-in carries it on every layout; Debian's 6.12 has no KHO and
+  passes the argument to init, which ignores it. DigitalOcean's 512 MB
+  Ubuntu converted without it (not looked into why).
+- **apt's timers stay off on the conversion's cloud-init boots**
+  (`bootcmd`: the first, `sem/config_write_files` missing, and the last
+  while the finish script is there; started again by it and by a
+  refusal): on Vultr's Ubuntu, unattended-upgrades
+  (`apt-daily-upgrade.service`, some 10 s into cloud-init's final
+  stage) upgraded systemd, which re-executed and restarted services,
+  `cloud-init-main.service` among them, so cloud-init died in runcmd
+  and never reached `power_state`. bootcmd runs before
+  `network-online.target`, which their jobs wait for, so stopping them
+  cancels the jobs.
+- **Vultr's Ubuntu runs uutils' coreutils** (`coreutils-from-uutils`)
+  but keeps GNU's `cp`, `mv` and `rm` (`gnucp`...), so the
+  initramfs's `cp -al` and `mv -T --exchange` are GNU's; `ln`, `mkdir`
+  and `dd` are uutils' (`dd` only on the `boot-separate` path).
+- **Tested on Vultr** (2026-10-29): Debian 13 and Ubuntu 26.04, the
+  conversion at 60 GB (each from the final file in one go, about two
+  minutes), a reboot after it, `setup.sh` and `--server-info`
+  (reflinks); no updates, release or provider snapshot.
+- **Tested on DigitalOcean** (2026-10-26; the conversion again on both
+  with Vultr's changes, 2026-10-29). Ubuntu 26.04 (kernel
   7.0, GRUB 2.14, dracut 110): the conversion at 10 GB (8.9 GiB XFS,
   nothing unused), and resumed after a failure past phase 1 (the
   missing XFS driver); a kernel upgrade, GRUB's packages reinstalled
@@ -299,6 +349,7 @@ for p in $(docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 \
     ".write_files[] | select(.path == \"$p\") | .content" cloud-init.yaml >"/tmp/ci/$i-${p##*/}"
 done
 { echo '#!/bin/sh'; docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 '.runcmd[0]' cloud-init.yaml; } >/tmp/ci/runcmd
+{ echo '#!/bin/sh'; docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 '.bootcmd[0]' cloud-init.yaml; } >/tmp/ci/bootcmd
 docker run --rm -v /tmp/ci:/mnt -w /mnt koalaman/shellcheck:stable -S warning $(ls /tmp/ci)
 ```
 

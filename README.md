@@ -46,15 +46,16 @@ take seconds whatever their size, sharing blocks until written.
 Everything stays on one filesystem the size of the disk (the system,
 releases, Docker's images and volumes), and a disk resize grows it.
 
-Tried on DigitalOcean's Debian 13 and Ubuntu 26.04 images. Only for a
-new server: the
-conversion runs once, at its first boots, before anything is on the
-disk.
+Tried on DigitalOcean's and Vultr's Debian 13 and Ubuntu 26.04 images.
+Only for a new server: the conversion runs once, at its first boots,
+before anything is on the disk.
 
 1. Create the server with the file as its user data, nothing to edit:
    in DigitalOcean's control panel, "Advanced Options", "Add
-   Initialization scripts", pasted whole; or `doctl compute droplet
-   create ... --user-data-file cloud-init.yaml`.
+   Initialization scripts", pasted whole, or `doctl compute droplet
+   create ... --user-data-file cloud-init.yaml`; on Vultr, "Cloud-Init
+   User-Data", or `vultr-cli instance create ... --userdata-file
+   cloud-init.yaml`.
 2. It reboots twice on its own, about three minutes, then is ready:
    `findmnt /` says `xfs`, and `grep devopsy-xfs
    /var/log/cloud-init-output.log` ends with "done, the root is XFS",
@@ -64,28 +65,37 @@ disk.
 What the server gets, by what the image had:
 
 ```
-Debian 13 (/boot in the root)
+DigitalOcean, Debian 13 (/boot in the root)
 vda1   /           XFS, the rest of the disk: everything
 vda2   /boot       ext4, 2 GiB: the image's own root, kept for GRUB
 vda14              BIOS boot, the image's
 vda15  /boot/efi   EFI system, the image's
 
-Ubuntu 26.04 (/boot on its own partition)
+DigitalOcean, Ubuntu 26.04 (/boot on its own partition)
 vda1   /           XFS, the rest of the disk: everything
 vda13  /boot       ext4, the image's
 vda14              BIOS boot, the image's
 vda15  /boot/efi   EFI system, the image's
+
+Vultr, Debian 13 and Ubuntu 26.04 (/boot in the root, EFI only)
+vda1   /boot/efi   EFI system, the image's
+vda2   /           XFS, the rest of the disk: everything
+vda3   /boot       ext4, 5 to 6 GiB: the image's own root, kept for GRUB
 ```
 
-On Ubuntu the old root's ext4 goes once the copy is done, and the XFS
-grows over its space.
+With `/boot` in the root, the ext4 holds the whole root until the copy
+is done, so it keeps 2 GiB or what the image needs then, in whole GiB
+(Vultr's images are larger). With `/boot` on its own partition, the old
+root's ext4 goes once the copy is done, and the XFS grows over its
+space. A swap file the provider made on the root (Vultr's `/swapfile`)
+is made again on the XFS, the same size.
 
 - **Updates work as on any server of the distribution:** kernel, GRUB
   and release upgrades write `/boot`, which GRUB reads as before; it
-  never reads XFS. Tried: a kernel upgrade, GRUB's packages reinstalled
-  (GRUB installs itself again then) and a kernel removed, each followed
-  by reboots, on both; on Debian an upgrade to the next release too
-  (Ubuntu 26.04 is offered none yet).
+  never reads XFS. Tried on DigitalOcean: a kernel upgrade, GRUB's
+  packages reinstalled (GRUB installs itself again then) and a kernel
+  removed, each followed by reboots, on both; on Debian an upgrade to
+  the next release too (Ubuntu 26.04 is offered none yet).
 - **Without `/boot` the server still boots** (`nofail`), reachable over
   SSH, and an update fails instead of writing where GRUB never looks:
   `/boot`'s mount point on the XFS is immutable (`chattr +i`).

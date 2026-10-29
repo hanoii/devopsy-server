@@ -3,28 +3,33 @@
 # (README.md, "An XFS root"). Converts the image's ext4 root to XFS on
 # the first boots, so every file on the server can be copied with
 # reflinks, then leaves the distribution as it is: the XFS root as
-# partition 1 (where DigitalOcean's restore of a snapshot expects it),
-# GRUB reading only ext4, and nothing of devopsy's behind. Then run
-# setup.sh as usual. Written for DigitalOcean's Debian 13 and Ubuntu
-# 26.04 images (GPT, booted by BIOS through GRUB), which differ in what
-# the conversion keeps of the ext4:
-# - /boot in the root (Debian): the ext4 stays as a 2 GiB /boot, its
-#   files at its top with boot -> . (GRUB finds /boot/grub there as it
-#   always did), and the XFS takes the root's partition number and
-#   PARTUUID (the kernel's root=PARTUUID=...). GRUB's BIOS core finds
-#   /boot by partition number, which that changes, so boot 1 installs
-#   one that finds it by UUID, and the last boot reinstalls GRUB as its
-#   updates do.
-# - /boot on its own partition (Ubuntu): GRUB never reads the root. The
-#   ext4 is shrunk to its minimum to hold the copy, then goes: the XFS
-#   takes its partition number, PARTUUID and filesystem UUID (the
-#   kernel's root=UUID=...), and the space it held stays unused before
-#   the root (XFS grows only at its end).
+# partition 1 where the root was (DigitalOcean's restore of a snapshot
+# expects it), GRUB reading only ext4, and nothing of devopsy's behind.
+# Then run setup.sh as usual. Written for DigitalOcean's and Vultr's
+# Debian 13 and Ubuntu 26.04 images (GPT; GRUB by BIOS and EFI on
+# DigitalOcean, by EFI alone on Vultr), which differ in what the
+# conversion keeps of the ext4:
+# - /boot in the root (DigitalOcean's Debian, both of Vultr's): the
+#   ext4 stays as /boot (2 GiB, or what a larger image's root needs),
+#   its files at its top with boot -> . (GRUB finds /boot/grub there as
+#   it always did), and the XFS takes the root's partition number and
+#   PARTUUID (the kernel's root=PARTUUID=..., which a kernel finding it
+#   by the ext4's UUID is switched to until the last boot). GRUB's BIOS
+#   core finds /boot by partition number, which that changes, so boot 1
+#   installs one that finds it by UUID, and the last boot reinstalls
+#   GRUB as its updates do; EFI's finds it by UUID already.
+# - /boot on its own partition (DigitalOcean's Ubuntu): GRUB never reads
+#   the root. The ext4 is shrunk to its minimum and moved to the end of
+#   the disk to hold the copy, then goes: the XFS takes its partition
+#   number, PARTUUID and filesystem UUID (the kernel's root=UUID=...),
+#   and grows over the space it held.
 #
 # Boot 1 (cloud-init): the root fills the disk already (growroot or
-# cloud-init's growpart). Note the layout, put a one-time conversion into
-# the initramfs (initramfs-tools on Debian, dracut on Ubuntu, both
-# through update-initramfs) and reboot.
+# cloud-init's growpart). Note the layout, set the kernel's arguments for
+# the conversion (kho=off, the root by PARTUUID), put a one-time
+# conversion into the initramfs (initramfs-tools on Debian, dracut on
+# Ubuntu, both through update-initramfs), remove swap files on the root
+# and reboot.
 # Boot 2 (initramfs, before the root is mounted), in phases that each
 # survive a cut and resume on the next boot:
 # 1. shrink the ext4 and make the rest a partition;
@@ -38,8 +43,9 @@
 # ever). Messages go to the serial console.
 # Boot 3: a plain boot on XFS. A per-boot script empties the copy of
 # /boot the root kept under its mount point, removes the conversion and
-# itself, and rebuilds the initramfs and GRUB's config as their updates
-# do. Its lines and boot 1's, with their times, are in
+# itself, rebuilds the initramfs and GRUB's config as their updates do
+# (the kernel's arguments as the image had them) and makes the swap
+# files again. Its lines and boot 1's, with their times, are in
 # /var/log/cloud-init-output.log.
 # Later: a disk resize grows the root as on any server of the
 # distribution, and kernel and GRUB updates write /boot as they always
