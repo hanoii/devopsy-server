@@ -97,7 +97,9 @@ XFS root", "Without the script" (each step by hand: a change to a
   the Traefik or the tunnel template: a project cannot set a host sysctl
   (compose's `sysctls:` are the container's namespace, and `net.core` is
   not among them). Written with `write_file` and applied with `sysctl -p`
-  only when it changed, as the swap step's `vm.swappiness`.
+  on every run, as the swap step's `vm.swappiness` (only when written, a
+  first run failing at `sysctl` left the file, and every rerun skipped
+  it).
 - **Docker looks for AppArmor once per daemon** (containerd's
   `HostSupports`, behind a `sync.Once`: securityfs, the kernel's
   `enabled` flag, `/sbin/apparmor_parser`), so installing `apparmor`
