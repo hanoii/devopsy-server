@@ -182,6 +182,25 @@ step_base() {
     log "base: extra packages: ${extra[*]}"
     apt_install "${extra[@]}"
   fi
+
+  # Name lookups on the local network, which a server never needs:
+  # systemd-resolved answers LLMNR on port 5355 of every address by
+  # default (Debian's and Ubuntu's), and multicast DNS when turned on.
+  # Written where resolved is missing too, for when it comes. Restarted
+  # when written, or while 5355 is still open: a first run that failed
+  # after writing is applied by the next, and an applied one restarts
+  # nothing.
+  local written=
+  write_file /etc/systemd/resolved.conf.d/90-devopsy.conf <<'EOF' && written=1
+[Resolve]
+LLMNR=no
+MulticastDNS=no
+EOF
+  if systemctl is-active --quiet systemd-resolved &&
+    { [ -n "$written" ] || ss -Hltun 'sport = :5355' | grep -q .; }; then
+    log "base: restarting systemd-resolved: no LLMNR or multicast DNS"
+    systemctl restart systemd-resolved
+  fi
 }
 
 step_swap() {

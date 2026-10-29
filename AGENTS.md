@@ -86,6 +86,16 @@ XFS root", "Without the script" (each step by hand: a change to a
   (GitHub's Ubuntu runners included) it would start confining the inner
   containers, changing what the suite tests. Nor the socket buffers
   (below): `net.core` is the host's, which a container cannot set.
+- **The `base` step turns off systemd-resolved's LLMNR and multicast
+  DNS** (`/etc/systemd/resolved.conf.d/90-devopsy.conf`): Debian's and
+  Ubuntu's resolved answer LLMNR on port 5355 of every address, the one
+  host service but SSH listening publicly (found on a DigitalOcean
+  server, 2026-10-29), and a server never resolves names on its local
+  network. Not a setting, as the socket buffers below. Written where
+  resolved is missing or masked (OrbStack) too, for when it comes;
+  resolved restarts when the file was written, or while 5355 is still
+  open (a first run cut after writing), so a rerun restarts nothing.
+  Tested on OrbStack with resolved unmasked.
 - **The `docker` step raises the socket buffers to 7.5 MB**
   (`/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and
   `wmem_max`), for QUIC: a Cloudflare Tunnel's connector (`cloudflared`,
