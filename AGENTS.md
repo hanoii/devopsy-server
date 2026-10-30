@@ -123,8 +123,13 @@ XFS root", "Without the script" (each step by hand: a change to a
   purged: Vultr's `ubuntu-server-minimal` depends on it. Applied by the next
   reboot: setup.sh never reboots (a rerun on a live server would take
   its sites down), and raises the restart flag a kernel update does
-  (`/run/reboot-required`, `devopsy-server` in its `.pkgs`), which
-  unattended-upgrades takes at `DEVOPSY_AUTO_REBOOT_TIME` even on a day
+  (`/run/reboot-required`, `devopsy-server` in its `.pkgs`) only when
+  the reboot changes something: the running kernel holds KHO's scratch
+  or a crash kernel to free, or kdump comes back (a flag for nothing,
+  as on Debian 13's 6.12, would be a banner asking for a reboot that
+  changes nothing, and an automatic one taking the sites down for it;
+  the user, 2026-10-29). unattended-upgrades
+  takes it at `DEVOPSY_AUTO_REBOOT_TIME` even on a day
   with nothing to upgrade (its 2.12's `reboot_if_requested_and_needed`,
   after every run that writes its stamp). `update-grub` runs while
   GRUB's config does not say so yet, never only when the drop-in was
