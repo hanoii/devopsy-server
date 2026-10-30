@@ -294,23 +294,34 @@ EOF
   # about 30 networks, and every project environment takes at least one.
   # The ranges are a setting: a server that must reach a corporate network
   # in them names others, and a rerun keeps them.
-  local pool pools=""
-  for pool in $DEVOPSY_ADDRESS_POOLS; do
-    pools+="${pools:+,}
-    {\"base\": \"$pool\", \"size\": 24}"
-  done
-  if write_file /etc/docker/daemon.json <<EOF; then
-{
-  "log-driver": "local",
-  "log-opts": {
-    "max-size": "20m",
-    "max-file": "5"
-  },
-  "live-restore": true,
-  "default-address-pools": [$pools
-  ]
-}
-EOF
+  # Merged into daemon.json, which others edit too (a proxy's `proxies`):
+  # these four keys are setup's, replaced with a warning when changed,
+  # and every other key stays. Compared as JSON, so a file that says the
+  # same in other words is not rewritten and Docker not restarted.
+  local daemon=/etc/docker/daemon.json ours current='{}' merged key
+  ours=$(jq -n --arg pools "$DEVOPSY_ADDRESS_POOLS" '{
+    "log-driver": "local",
+    "log-opts": {"max-size": "20m", "max-file": "5"},
+    "live-restore": true,
+    "default-address-pools": [$pools | splits(" +") | select(. != "") | {base: ., size: 24}]
+  }')
+  if [ -s "$daemon" ]; then
+    current=$(jq -e 'if type == "object" then . else error end' "$daemon" 2>/dev/null) ||
+      die "$daemon is not a JSON object: fix it, then run setup.sh again"
+    for key in $(jq -r 'keys[]' <<<"$ours"); do
+      if jq -e --arg k "$key" 'has($k)' <<<"$current" >/dev/null &&
+        [ "$(jq -cS --arg k "$key" '.[$k]' <<<"$current")" != "$(jq -cS --arg k "$key" '.[$k]' <<<"$ours")" ]; then
+        if [ "$key" = default-address-pools ]; then
+          warn "docker: $key in $daemon differs from DEVOPSY_ADDRESS_POOLS, replaced: set that to keep other pools"
+        else
+          warn "docker: $key in $daemon was changed, replaced by setup.sh's"
+        fi
+      fi
+    done
+  fi
+  merged=$(jq -s '.[0] + .[1]' <(printf '%s' "$current") <(printf '%s' "$ours"))
+  if [ "$(jq -cS . <<<"$current")" != "$(jq -cS . <<<"$merged")" ]; then
+    printf '%s\n' "$merged" | write_file "$daemon" || true
     log "docker: restarting to apply daemon.json"
     systemctl restart docker
   fi

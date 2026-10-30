@@ -112,6 +112,11 @@ test_one() {
   fi
   x grep -qx devopsy-server /run/reboot-required.pkgs || fail "no restart asked for the kernel's arguments"
 
+  # A key of someone else's in daemon.json (a proxy's), which the second
+  # run keeps without restarting Docker.
+  x sh -c 'jq ". + {proxies: {\"http-proxy\": \"http://proxy.example.com:8080\"}}" /etc/docker/daemon.json >/tmp/d &&
+    cat /tmp/d >/etc/docker/daemon.json'
+
   echo "== $base: second run"
   x bash /src/setup.sh >"$out/$name.second" 2>&1 || {
     cat "$out/$name.second"
@@ -123,6 +128,24 @@ test_one() {
     fail "the second run changed something"
   fi
   [ "$(x sh -c 'wc -l </tmp/update-grub.runs')" = 1 ] || fail "update-grub did not run exactly once"
+  x jq -e '.proxies["http-proxy"]' /etc/docker/daemon.json >/dev/null || fail "the second run dropped daemon.json's proxies"
+
+  echo "== $base: third run, other pools by hand"
+  x sh -c 'jq ".[\"default-address-pools\"] = [{base: \"10.10.0.0/16\", size: 24}]" /etc/docker/daemon.json >/tmp/d &&
+    cat /tmp/d >/etc/docker/daemon.json'
+  x bash /src/setup.sh >"$out/$name.third" 2>&1 || {
+    cat "$out/$name.third"
+    fail "the third run failed"
+  }
+  grep -q 'default-address-pools .* DEVOPSY_ADDRESS_POOLS' "$out/$name.third" || {
+    cat "$out/$name.third"
+    fail "the third run did not warn of the pools it replaced"
+  }
+  rm -f "$out/$name.third"
+  x jq -e '.["default-address-pools"][0].base == "172.16.0.0/12"' /etc/docker/daemon.json >/dev/null ||
+    fail "the third run kept the pools set by hand"
+  x jq -e '.proxies["http-proxy"]' /etc/docker/daemon.json >/dev/null || fail "the third run dropped daemon.json's proxies"
+  x systemctl is-active --quiet docker || fail "Docker is not running after the third run"
   rm -f "$out/$name.second"
   echo "== $base: ok"
 }
