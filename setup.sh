@@ -18,7 +18,7 @@ CONFIG_FILE=/etc/devopsy/server.env
 # Settings saved to $CONFIG_FILE. A new one also goes in usage and README.md.
 SETTINGS=(
   DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SWAP DEVOPSY_AUTO_REBOOT_TIME
-  DEVOPSY_APT_PACKAGES DEVOPSY_ROOT DEVOPSY_ADDRESS_POOLS
+  DEVOPSY_APT_PACKAGES DEVOPSY_ROOT DEVOPSY_ADDRESS_POOLS DEVOPSY_KDUMP
 )
 
 usage() {
@@ -48,6 +48,9 @@ Settings are environment variables, all optional:
                             192.168.0.0/16".
   DEVOPSY_SUDO              1 gives the deploy user passwordless sudo.
                             Default: 0.
+  DEVOPSY_KDUMP             off frees the memory kdump reserves for a crash
+                            kernel, where the image has kdump-tools, from
+                            the next reboot. Default: on, as the image.
   DEVOPSY_FORCE             1 runs on something other than Debian 13 or
                             Ubuntu 26.04. Not saved.
 
@@ -91,6 +94,7 @@ load_settings() {
   DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
   DEVOPSY_ROOT=${DEVOPSY_ROOT:-}
   DEVOPSY_ADDRESS_POOLS=${DEVOPSY_ADDRESS_POOLS:-172.16.0.0/12 192.168.0.0/16}
+  DEVOPSY_KDUMP=${DEVOPSY_KDUMP:-on}
 }
 
 # Rejects bad values before they are saved, so a typo does not stick.
@@ -104,6 +108,7 @@ validate_settings() {
     [[ $DEVOPSY_ROOT =~ ^/[A-Za-z0-9._/-]+$ ]] && [ "$DEVOPSY_ROOT" != / ] \
       || die "DEVOPSY_ROOT must be an absolute directory, not /: $DEVOPSY_ROOT"
   fi
+  case $DEVOPSY_KDUMP in on | off) ;; *) die "DEVOPSY_KDUMP is on or off, not '$DEVOPSY_KDUMP'" ;; esac
   local pool cidr_re='^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|1[0-9]|2[0-4])$'
   [ -n "$DEVOPSY_ADDRESS_POOLS" ] || die "DEVOPSY_ADDRESS_POOLS needs at least one range"
   for pool in $DEVOPSY_ADDRESS_POOLS; do
@@ -203,41 +208,66 @@ EOF
     systemctl restart systemd-resolved
   fi
 
-  # Memory the kernel keeps for kexec, which nothing on a server uses:
+  # Memory the kernel keeps for kexec, which nothing on a server uses.
   # Kexec HandOver's scratch memory, held for movable pages only by a
   # kernel that turns it on by default (Ubuntu 26.04's: 646 MB of 2 GB on
   # DigitalOcean, 1.25 GB on Vultr), which page tables, slab and socket
   # buffers cannot use: kho=off on every server, so a later kernel with it
   # on (a release upgrade) has it from its first boot, and one without it
-  # passes the word to init, which ignores it. And kdump's crash kernel,
-  # where kdump-tools adds crashkernel= (Vultr's Ubuntu: 320 MB), its
-  # service disabled, since it fails without that memory. A drop-in after
+  # passes the word to init, which ignores it. kdump's crash kernel, where
+  # kdump-tools adds crashkernel= (Vultr's Ubuntu: 320 MB), is a setting,
+  # DEVOPSY_KDUMP: off takes crashkernel= out and disables its service
+  # (it fails without that memory), on puts both back. A drop-in after
   # the image's (zz-), applied by the next reboot, which the restart flag
   # asks for as a kernel update does (DEVOPSY_AUTO_REBOOT_TIME takes it).
-  # GRUB's config is updated while it does not say so yet, so a first run
-  # cut after writing is applied by the next, and an applied one updates
-  # nothing.
-  local grubd=/etc/default/grub.d grubcfg=/boot/grub/grub.cfg kdump='' stale=''
-  if [ -f "$grubd/kdump-tools.cfg" ]; then kdump=1; fi
+  # GRUB's config is updated while it does not say what the drop-in does,
+  # so a run cut after writing is finished by the next, and an applied
+  # one updates nothing.
+  local grubd=/etc/default/grub.d grubcfg=/boot/grub/grub.cfg kdump='' stale='' mb
+  if [ -f "$grubd/kdump-tools.cfg" ]; then kdump=$DEVOPSY_KDUMP; fi
   # shellcheck disable=SC2016 # grub-mkconfig expands them
   {
     echo '# Written by devopsy-server (setup.sh, base): no memory for kexec.'
-    [ -z "$kdump" ] || echo 'GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")'
+    [ "$kdump" != off ] || echo 'GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")'
     echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"'
   } | write_file "$grubd/zz-devopsy.cfg" || true
   if [ -f "$grubcfg" ]; then
-    if ! grep -q ' kho=off' "$grubcfg"; then stale=1; fi
-    if [ -n "$kdump" ] && grep -q ' crashkernel=' "$grubcfg"; then stale=1; fi
+    if ! grep -q ' kho=off' "$grubcfg"; then
+      stale=1
+      # KHO's scratch is the CMA pageblocks of a kernel with no CMA of its
+      # own (the rows have the header's four leading words).
+      mb=$(awk '/^Pages per block:/ { p = $4 } /^Number of blocks type/ { for (i = 1; i <= NF; i++) if ($i == "CMA") c = i; next }
+        c && /^Node/ { n += $c } END { print int(n * p * 4 / 1024) }' /proc/pagetypeinfo 2>/dev/null)
+      if [ "${mb:-0}" -gt 0 ]; then
+        log "base: kho=off from the next reboot: Kexec HandOver holds $mb MB for movable pages only, which page tables, slab and socket buffers cannot use, and nothing here kexecs"
+      else
+        log "base: kho=off from the next reboot, for a kernel that turns Kexec HandOver on (this one does not)"
+      fi
+    fi
+    if [ "$kdump" = off ] && grep -q ' crashkernel=' "$grubcfg"; then
+      stale=1
+      mb=$(($(cat /sys/kernel/kexec_crash_size 2>/dev/null || echo 0) / 1048576))
+      if [ "$mb" -gt 0 ]; then
+        log "base: no crash kernel from the next reboot (DEVOPSY_KDUMP=off): frees the $mb MB kdump reserves"
+      else
+        log "base: no crash kernel from the next reboot (DEVOPSY_KDUMP=off)"
+      fi
+    elif [ "$kdump" = on ] && ! grep -q ' crashkernel=' "$grubcfg"; then
+      stale=1
+      log "base: kdump's crash kernel back from the next reboot (DEVOPSY_KDUMP=on)"
+    fi
   fi
   if [ -n "$stale" ] && command -v update-grub >/dev/null; then
-    log "base: updating GRUB: no memory for kexec from the next reboot"
     update-grub >/dev/null 2>&1 || die "update-grub failed"
     echo '*** System restart required ***' >/run/reboot-required
     grep -qsx devopsy-server /run/reboot-required.pkgs || echo devopsy-server >>/run/reboot-required.pkgs
   fi
-  if [ -n "$kdump" ] && systemctl is-enabled --quiet kdump-tools.service 2>/dev/null; then
-    log "base: disabling kdump-tools"
+  if [ "$kdump" = off ] && systemctl is-enabled --quiet kdump-tools.service 2>/dev/null; then
+    log "base: disabling kdump-tools (DEVOPSY_KDUMP=off)"
     systemctl disable --quiet kdump-tools.service
+  elif [ "$kdump" = on ] && [ "$(systemctl is-enabled kdump-tools.service 2>/dev/null)" = disabled ]; then
+    log "base: enabling kdump-tools (DEVOPSY_KDUMP=on)"
+    systemctl enable --quiet kdump-tools.service
   fi
 }
 

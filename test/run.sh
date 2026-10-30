@@ -104,12 +104,9 @@ test_one() {
     fail "LLMNR is still open"
   fi
   x grep -q ' kho=off' /boot/grub/grub.cfg || fail "GRUB's config lacks kho=off"
-  if x grep crashkernel= /boot/grub/grub.cfg; then
-    fail "GRUB's config still reserves a crash kernel"
-  fi
-  if x systemctl is-enabled --quiet kdump-tools.service; then
-    fail "kdump-tools is still enabled"
-  fi
+  # kdump as the image has it: DEVOPSY_KDUMP is on by default.
+  x grep -q ' crashkernel=' /boot/grub/grub.cfg || fail "the first run took kdump's crash kernel out"
+  x systemctl is-enabled --quiet kdump-tools.service || fail "the first run disabled kdump-tools"
   x grep -qx devopsy-server /run/reboot-required.pkgs || fail "no restart asked for the kernel's arguments"
 
   # A key of someone else's in daemon.json (a proxy's), which the second
@@ -130,10 +127,10 @@ test_one() {
   [ "$(x sh -c 'wc -l </tmp/update-grub.runs')" = 1 ] || fail "update-grub did not run exactly once"
   x jq -e '.proxies["http-proxy"]' /etc/docker/daemon.json >/dev/null || fail "the second run dropped daemon.json's proxies"
 
-  echo "== $base: third run, other pools by hand"
+  echo "== $base: third run, other pools by hand, DEVOPSY_KDUMP=off"
   x sh -c 'jq ".[\"default-address-pools\"] = [{base: \"10.10.0.0/16\", size: 24}]" /etc/docker/daemon.json >/tmp/d &&
     cat /tmp/d >/etc/docker/daemon.json'
-  x bash /src/setup.sh >"$out/$name.third" 2>&1 || {
+  x env DEVOPSY_KDUMP=off bash /src/setup.sh >"$out/$name.third" 2>&1 || {
     cat "$out/$name.third"
     fail "the third run failed"
   }
@@ -146,6 +143,22 @@ test_one() {
     fail "the third run kept the pools set by hand"
   x jq -e '.proxies["http-proxy"]' /etc/docker/daemon.json >/dev/null || fail "the third run dropped daemon.json's proxies"
   x systemctl is-active --quiet docker || fail "Docker is not running after the third run"
+  if x grep crashkernel= /boot/grub/grub.cfg; then
+    fail "DEVOPSY_KDUMP=off left the crash kernel in GRUB's config"
+  fi
+  if x systemctl is-enabled --quiet kdump-tools.service; then
+    fail "DEVOPSY_KDUMP=off left kdump-tools enabled"
+  fi
+
+  echo "== $base: fourth run, DEVOPSY_KDUMP=on"
+  x env DEVOPSY_KDUMP=on bash /src/setup.sh >"$out/$name.fourth" 2>&1 || {
+    cat "$out/$name.fourth"
+    fail "the fourth run failed"
+  }
+  rm -f "$out/$name.fourth"
+  x grep -q ' crashkernel=' /boot/grub/grub.cfg || fail "DEVOPSY_KDUMP=on did not put the crash kernel back"
+  x systemctl is-enabled --quiet kdump-tools.service || fail "DEVOPSY_KDUMP=on did not enable kdump-tools again"
+  x grep -q ' kho=off' /boot/grub/grub.cfg || fail "the fourth run lost kho=off"
   rm -f "$out/$name.second"
   echo "== $base: ok"
 }
