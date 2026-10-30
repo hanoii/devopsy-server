@@ -202,6 +202,40 @@ EOF
     log "base: restarting systemd-resolved: no LLMNR or multicast DNS"
     systemctl restart systemd-resolved
   fi
+
+  # Memory the kernel keeps for kexec, which nothing on a server uses:
+  # Kexec HandOver's scratch memory, where a kernel in /boot turns it on
+  # by default (Ubuntu 26.04's), held for movable pages only (646 MB of 2
+  # GB on DigitalOcean, 1.25 GB on Vultr), which page tables, slab and
+  # socket buffers cannot use; and kdump's crash kernel, where kdump-tools
+  # adds crashkernel= (Vultr's Ubuntu: 320 MB), its service disabled,
+  # since it fails without that memory. A drop-in after the image's (zz-),
+  # applied by the next reboot. GRUB's config is updated while it does
+  # not say so yet, so a first run cut after writing is applied by the
+  # next, and an applied one updates nothing.
+  local grubd=/etc/default/grub.d grubcfg=/boot/grub/grub.cfg kho='' kdump='' stale=''
+  if grep -qsx 'CONFIG_KEXEC_HANDOVER_ENABLE_DEFAULT=y' /boot/config-*; then kho=1; fi
+  if [ -f "$grubd/kdump-tools.cfg" ]; then kdump=1; fi
+  if [ -n "$kho$kdump" ]; then
+    # shellcheck disable=SC2016 # grub-mkconfig expands them
+    {
+      echo '# Written by devopsy-server (setup.sh, base): no memory for kexec.'
+      [ -z "$kdump" ] || echo 'GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")'
+      [ -z "$kho" ] || echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"'
+    } | write_file "$grubd/zz-devopsy.cfg" || true
+    if [ -f "$grubcfg" ]; then
+      if [ -n "$kho" ] && ! grep -q ' kho=off' "$grubcfg"; then stale=1; fi
+      if [ -n "$kdump" ] && grep -q ' crashkernel=' "$grubcfg"; then stale=1; fi
+    fi
+    if [ -n "$stale" ] && command -v update-grub >/dev/null; then
+      log "base: updating GRUB: no memory for kexec from the next reboot"
+      update-grub >/dev/null 2>&1 || die "update-grub failed"
+    fi
+    if [ -n "$kdump" ] && systemctl is-enabled --quiet kdump-tools.service 2>/dev/null; then
+      log "base: disabling kdump-tools"
+      systemctl disable --quiet kdump-tools.service
+    fi
+  fi
 }
 
 step_swap() {
