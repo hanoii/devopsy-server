@@ -99,21 +99,28 @@ XFS root", "Without the script" (each step by hand: a change to a
   `test/run.sh` checks it (below).
 - **The `base` step frees the memory the kernel keeps for kexec**
   (`/etc/default/grub.d/zz-devopsy.cfg`, after the image's drop-ins):
-  `kho=off` on every server, and `crashkernel=` taken out where
-  `kdump-tools.cfg` adds it, kdump-tools' service disabled (it fails
-  without the memory). Ubuntu 26.04's kernel (7.0) turns
+  `kho=off` on every server, and with `DEVOPSY_KDUMP=off`
+  `crashkernel=` taken out where `kdump-tools.cfg` adds it, kdump-tools'
+  service disabled (it fails without the memory); `on`, the default,
+  puts both back, as settings apply their state on every run. kdump is a
+  setting and KHO not (decided with the user, 2026-10-29): `kho=off`
+  takes nothing away, while kdump is a capability the image chose, crash
+  dumps, which setup.sh should not undo unasked. The log says what is
+  freed and why, with the size it reads (KHO's: the CMA pageblocks in
+  `/proc/pagetypeinfo`, kdump's: `kexec_crash_size`). Ubuntu 26.04's
+  kernel (7.0) turns
   Kexec HandOver on and marks its scratch memory CMA, for movable pages
   only, so page tables, slab and socket buffers share the rest: 646 MB
   of 2 GB on DigitalOcean, 1.25 GB on Vultr, where its image also
   reserves 320 MB for kdump (checked 2026-10-29; DigitalOcean's has no
-  kdump). Nothing on a devopsy server kexecs, so not a setting, as the
-  socket buffers below. On every server, not only where a kernel has
+  kdump). Nothing on a devopsy server kexecs, so KHO is no setting, as
+  the socket buffers below. On every server, not only where a kernel has
   `CONFIG_KEXEC_HANDOVER_ENABLE_DEFAULT=y` (decided with the user): a
   later kernel with it on, a Debian release upgrade, has it from its
   first boot without a rerun, and Debian 13's 6.12, without KHO, passes
   the word to user space ("Unknown kernel command line parameters"),
-  which ignores it (checked on Vultr). Kept, not purged: Vultr's
-  `ubuntu-server-minimal` depends on `kdump-tools`. Applied by the next
+  which ignores it (checked on Vultr). kdump-tools is disabled, never
+  purged: Vultr's `ubuntu-server-minimal` depends on it. Applied by the next
   reboot: setup.sh never reboots (a rerun on a live server would take
   its sites down), and raises the restart flag a kernel update does
   (`/run/reboot-required`, `devopsy-server` in its `.pkgs`), which
@@ -419,7 +426,8 @@ drop-in and an `update-grub` planted in both, which builds GRUB's config
 from the drop-ins) and that the second wrote, created, restarted and updated
 nothing, keeping a key of another's added to `daemon.json` before it;
 then a third run from pools changed by hand there, replaced with a
-warning. About a minute locally;
+warning, with `DEVOPSY_KDUMP=off`, and a fourth with `on`, which puts the
+crash kernel and kdump-tools back. About a minute locally;
 `test/run.sh ubuntu:26.04` runs one. A new check goes there, and a new
 supported release is a line of its default list and of the workflow's
 matrix. What it cannot show: AppArmor (the container shares the host's

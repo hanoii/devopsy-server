@@ -127,7 +127,7 @@ is made again on the XFS, the same size.
 
 | Step       | What it does |
 | ---------- | ------------ |
-| `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, on Ubuntu `coreutils-from-gnu` (devopsy's scripts expect GNU's coreutils, which Ubuntu may replace with Rust's), plus `DEVOPSY_APT_PACKAGES`. Turns off systemd-resolved's LLMNR and multicast DNS, name lookups on the local network that a server never needs (Debian's answers LLMNR on port 5355 of every address). Frees the memory the kernel keeps for kexec, which a server never uses: `kho=off` on every server (Ubuntu 26.04's kernel turns Kexec HandOver on and keeps up to 1.25 of 2 GB for movable pages only; a kernel without it ignores the word), and no crash kernel where kdump-tools reserves one (Vultr's Ubuntu: 320 MB), kdump-tools disabled. Applied by the next reboot, which it asks for as a kernel update does (`/run/reboot-required`, taken by `DEVOPSY_AUTO_REBOOT_TIME`). |
+| `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, on Ubuntu `coreutils-from-gnu` (devopsy's scripts expect GNU's coreutils, which Ubuntu may replace with Rust's), plus `DEVOPSY_APT_PACKAGES`. Turns off systemd-resolved's LLMNR and multicast DNS, name lookups on the local network that a server never needs (Debian's answers LLMNR on port 5355 of every address). Frees the memory the kernel keeps for Kexec HandOver, which a server never uses: `kho=off` on every server (Ubuntu 26.04's kernel turns it on and keeps up to 1.25 of 2 GB for movable pages only, which page tables, slab and socket buffers cannot use; a kernel without it ignores the word). With `DEVOPSY_KDUMP=off`, also the crash kernel kdump-tools reserves (Vultr's Ubuntu: 320 MB), kdump-tools disabled. Applied by the next reboot, which it asks for as a kernel update does (`/run/reboot-required`, taken by `DEVOPSY_AUTO_REBOOT_TIME`). |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
 | `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor (Debian's and Ubuntu's do; a rerun restarts a daemon that started without it). Rotated logs, `live-restore` and /24 address pools, merged into `daemon.json`: those four keys are setup's (one changed by hand is replaced, with a warning; the pools are `DEVOPSY_ADDRESS_POOLS`), and anything else there, like a proxy's `proxies`, stays. Socket buffers of 7.5 MB (`net.core.rmem_max`, `wmem_max`), what a Cloudflare Tunnel's connector asks for. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
@@ -140,6 +140,7 @@ is made again on the XFS, the same size.
 | -------------------------- | ------- | - |
 | `DEVOPSY_USER`             | `devopsy` | The deploy user. |
 | `DEVOPSY_SUDO`             | `0`     | `1` gives the deploy user passwordless sudo. |
+| `DEVOPSY_KDUMP`            | `on`    | `off` frees the memory kdump reserves for a crash kernel, where the image has kdump-tools (Vultr's Ubuntu: 320 MB of 2 GB), and disables it, from the next reboot; `on` puts both back. |
 | `DEVOPSY_APT_PACKAGES`     |         | Extra apt packages, space separated, like `htop ncdu`. Removing one from the list does not uninstall it. |
 | `DEVOPSY_SWAP`             |         | Swap file size, like `2G` (see "Swap" below). |
 | `DEVOPSY_AUTO_REBOOT_TIME` |         | Reboot after upgrades that need it, at this time, like `04:00`. |
@@ -176,8 +177,8 @@ systemctl try-restart systemd-resolved
 `ss -ltun 'sport = :5355'` then lists nothing: LLMNR is closed.
 
 The kernel's arguments, applied by the next reboot; the `crashkernel=`
-line and kdump-tools only where `/etc/default/grub.d/kdump-tools.cfg` is
-there:
+line and kdump-tools only with `DEVOPSY_KDUMP=off`, where
+`/etc/default/grub.d/kdump-tools.cfg` is there:
 
 ```sh
 cat > /etc/default/grub.d/zz-devopsy.cfg <<'EOF'
