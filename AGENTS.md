@@ -139,6 +139,22 @@ XFS root", "Without the script" (each step by hand: a change to a
   on every run, as the swap step's `vm.swappiness`. Before, both applied
   it only when written, so a first run failing at `sysctl` left the file
   and every rerun skipped it.
+- **`daemon.json` is merged, never written whole** (`step_docker`,
+  with `jq`): its four keys (`log-driver`, `log-opts`, `live-restore`,
+  `default-address-pools`) are setup's and replaced, with a warning when
+  they held something else (the pools' names `DEVOPSY_ADDRESS_POOLS`),
+  and every other key stays. Why: it is the one file setup writes that
+  others edit too; written whole, a rerun dropped a proxy's `proxies`
+  (found on a server behind an HTTP proxy, 2026-10-27), and Docker then
+  pulled nothing. Decided with the user over a prompt with a diff, as
+  dpkg asks for a conffile: setup.sh runs every step on every run, often
+  without a terminal (`curl | bash`), with nowhere to remember a "keep
+  mine", and of the four keys only the pools are something to change,
+  which is the setting's job. Compared as JSON (`jq -cS`), so a file
+  saying the same in other words (the heredoc of before) is not
+  rewritten and Docker not restarted. Not a JSON object: setup.sh stops,
+  the file as it is. A key setup.sh stops setting is left there (lean
+  checks).
 - **Docker looks for AppArmor once per daemon** (containerd's
   `HostSupports`, behind a `sync.Once`: securityfs, the kernel's
   `enabled` flag, `/sbin/apparmor_parser`), so installing `apparmor`
@@ -401,7 +417,9 @@ open before on Debian, so the check means something; the kernel's
 arguments for kexec's memory and the restart flag, from kdump's
 drop-in and an `update-grub` planted in both, which builds GRUB's config
 from the drop-ins) and that the second wrote, created, restarted and updated
-nothing. About a minute locally;
+nothing, keeping a key of another's added to `daemon.json` before it;
+then a third run from pools changed by hand there, replaced with a
+warning. About a minute locally;
 `test/run.sh ubuntu:26.04` runs one. A new check goes there, and a new
 supported release is a line of its default list and of the workflow's
 matrix. What it cannot show: AppArmor (the container shares the host's

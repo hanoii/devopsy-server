@@ -129,7 +129,7 @@ is made again on the XFS, the same size.
 | ---------- | ------------ |
 | `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, on Ubuntu `coreutils-from-gnu` (devopsy's scripts expect GNU's coreutils, which Ubuntu may replace with Rust's), plus `DEVOPSY_APT_PACKAGES`. Turns off systemd-resolved's LLMNR and multicast DNS, name lookups on the local network that a server never needs (Debian's answers LLMNR on port 5355 of every address). Frees the memory the kernel keeps for kexec, which a server never uses: `kho=off` on every server (Ubuntu 26.04's kernel turns Kexec HandOver on and keeps up to 1.25 of 2 GB for movable pages only; a kernel without it ignores the word), and no crash kernel where kdump-tools reserves one (Vultr's Ubuntu: 320 MB), kdump-tools disabled. Applied by the next reboot, which it asks for as a kernel update does (`/run/reboot-required`, taken by `DEVOPSY_AUTO_REBOOT_TIME`). |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
-| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor (Debian's and Ubuntu's do; a rerun restarts a daemon that started without it). Rotated logs, `live-restore` and /24 address pools. Socket buffers of 7.5 MB (`net.core.rmem_max`, `wmem_max`), what a Cloudflare Tunnel's connector asks for. |
+| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor (Debian's and Ubuntu's do; a rerun restarts a daemon that started without it). Rotated logs, `live-restore` and /24 address pools, merged into `daemon.json`: those four keys are setup's (one changed by hand is replaced, with a warning; the pools are `DEVOPSY_ADDRESS_POOLS`), and anything else there, like a proxy's `proxies`, stays. Socket buffers of 7.5 MB (`net.core.rmem_max`, `wmem_max`), what a Cloudflare Tunnel's connector asks for. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
 | `cli`      | Installs `devopsy` in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`; a rerun upgrades it. |
@@ -233,6 +233,7 @@ apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   apparmor docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
+# a new daemon.json; on one that exists, add or replace these four keys
 cat > /etc/docker/daemon.json <<'EOF'
 {
   "log-driver": "local",
