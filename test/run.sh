@@ -107,7 +107,17 @@ test_one() {
   # kdump as the image has it: DEVOPSY_KDUMP is on by default.
   x grep -q ' crashkernel=' /boot/grub/grub.cfg || fail "the first run took kdump's crash kernel out"
   x systemctl is-enabled --quiet kdump-tools.service || fail "the first run disabled kdump-tools"
-  x grep -qx devopsy-server /run/reboot-required.pkgs || fail "no restart asked for the kernel's arguments"
+  # A restart only when it frees something: KHO's scratch in the running
+  # kernel, the host's (CMA pageblocks).
+  # shellcheck disable=SC2016 # awk's own fields
+  if [ "$(x awk '/^Number of blocks type/ { for (i = 1; i <= NF; i++) if ($i == "CMA") c = i; next }
+    c && /^Node/ { n += $c } END { print n + 0 }' /proc/pagetypeinfo)" = 0 ]; then
+    if x grep -qsx devopsy-server /run/reboot-required.pkgs; then
+      fail "a restart was asked for, though the running kernel holds no KHO scratch"
+    fi
+  else
+    x grep -qx devopsy-server /run/reboot-required.pkgs || fail "no restart asked to free KHO's scratch"
+  fi
 
   # A key of someone else's in daemon.json (a proxy's), which the second
   # run keeps without restarting Docker.
@@ -158,6 +168,7 @@ test_one() {
   rm -f "$out/$name.fourth"
   x grep -q ' crashkernel=' /boot/grub/grub.cfg || fail "DEVOPSY_KDUMP=on did not put the crash kernel back"
   x systemctl is-enabled --quiet kdump-tools.service || fail "DEVOPSY_KDUMP=on did not enable kdump-tools again"
+  x grep -qx devopsy-server /run/reboot-required.pkgs || fail "no restart asked to bring kdump back"
   x grep -q ' kho=off' /boot/grub/grub.cfg || fail "the fourth run lost kho=off"
   rm -f "$out/$name.second"
   echo "== $base: ok"

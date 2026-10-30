@@ -219,11 +219,13 @@ EOF
   # DEVOPSY_KDUMP: off takes crashkernel= out and disables its service
   # (it fails without that memory), on puts both back. A drop-in after
   # the image's (zz-), applied by the next reboot, which the restart flag
-  # asks for as a kernel update does (DEVOPSY_AUTO_REBOOT_TIME takes it).
+  # asks for as a kernel update does (DEVOPSY_AUTO_REBOOT_TIME takes it),
+  # only when it changes something: the running kernel holds KHO's
+  # scratch or a crash kernel to free, or kdump comes back.
   # GRUB's config is updated while it does not say what the drop-in does,
   # so a run cut after writing is finished by the next, and an applied
   # one updates nothing.
-  local grubd=/etc/default/grub.d grubcfg=/boot/grub/grub.cfg kdump='' stale='' mb
+  local grubd=/etc/default/grub.d grubcfg=/boot/grub/grub.cfg kdump='' stale='' reboot='' mb
   if [ -f "$grubd/kdump-tools.cfg" ]; then kdump=$DEVOPSY_KDUMP; fi
   # shellcheck disable=SC2016 # grub-mkconfig expands them
   {
@@ -239,6 +241,7 @@ EOF
       mb=$(awk '/^Pages per block:/ { p = $4 } /^Number of blocks type/ { for (i = 1; i <= NF; i++) if ($i == "CMA") c = i; next }
         c && /^Node/ { n += $c } END { print int(n * p * 4 / 1024) }' /proc/pagetypeinfo 2>/dev/null)
       if [ "${mb:-0}" -gt 0 ]; then
+        reboot=1
         log "base: kho=off from the next reboot: Kexec HandOver holds $mb MB for movable pages only, which page tables, slab and socket buffers cannot use, and nothing here kexecs"
       else
         log "base: kho=off from the next reboot, for a kernel that turns Kexec HandOver on (this one does not)"
@@ -248,19 +251,22 @@ EOF
       stale=1
       mb=$(($(cat /sys/kernel/kexec_crash_size 2>/dev/null || echo 0) / 1048576))
       if [ "$mb" -gt 0 ]; then
+        reboot=1
         log "base: no crash kernel from the next reboot (DEVOPSY_KDUMP=off): frees the $mb MB kdump reserves"
       else
         log "base: no crash kernel from the next reboot (DEVOPSY_KDUMP=off)"
       fi
     elif [ "$kdump" = on ] && ! grep -q ' crashkernel=' "$grubcfg"; then
-      stale=1
+      stale=1 reboot=1
       log "base: kdump's crash kernel back from the next reboot (DEVOPSY_KDUMP=on)"
     fi
   fi
   if [ -n "$stale" ] && command -v update-grub >/dev/null; then
     update-grub >/dev/null 2>&1 || die "update-grub failed"
-    echo '*** System restart required ***' >/run/reboot-required
-    grep -qsx devopsy-server /run/reboot-required.pkgs || echo devopsy-server >>/run/reboot-required.pkgs
+    if [ -n "$reboot" ]; then
+      echo '*** System restart required ***' >/run/reboot-required
+      grep -qsx devopsy-server /run/reboot-required.pkgs || echo devopsy-server >>/run/reboot-required.pkgs
+    fi
   fi
   if [ "$kdump" = off ] && systemctl is-enabled --quiet kdump-tools.service 2>/dev/null; then
     log "base: disabling kdump-tools (DEVOPSY_KDUMP=off)"
