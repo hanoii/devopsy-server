@@ -69,13 +69,10 @@ test_one() {
       ;;
   esac
 
-  # A kernel with Kexec HandOver on by default and kdump's drop-in, on
-  # both distributions (the base step goes by what is there), with GRUB's
-  # config and an update-grub that builds it from the drop-ins, as
-  # grub-mkconfig does, and counts its runs.
+  # kdump's drop-in, GRUB's config and an update-grub that builds it from
+  # the drop-ins, as grub-mkconfig does, and counts its runs.
   # shellcheck disable=SC2016 # expanded in the container
   x sh -c 'mkdir -p /boot/grub /etc/default/grub.d &&
-    echo CONFIG_KEXEC_HANDOVER_ENABLE_DEFAULT=y >/boot/config-7.0.0-test &&
     echo "linux /vmlinuz root=/dev/vda1 ro crashkernel=320M" >/boot/grub/grub.cfg &&
     echo "GRUB_CMDLINE_LINUX_DEFAULT=\"\$GRUB_CMDLINE_LINUX_DEFAULT crashkernel=2G-4G:320M\"" >/etc/default/grub.d/kdump-tools.cfg &&
     printf "%s\n" "#!/bin/sh" "echo run >>/tmp/update-grub.runs" "GRUB_CMDLINE_LINUX_DEFAULT=quiet" \
@@ -113,6 +110,7 @@ test_one() {
   if x systemctl is-enabled --quiet kdump-tools.service; then
     fail "kdump-tools is still enabled"
   fi
+  x grep -qx devopsy-server /run/reboot-required.pkgs || fail "no restart asked for the kernel's arguments"
 
   echo "== $base: second run"
   x bash /src/setup.sh >"$out/$name.second" 2>&1 || {
