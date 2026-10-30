@@ -46,46 +46,57 @@ take seconds whatever their size, sharing blocks until written.
 Everything stays on one filesystem the size of the disk (the system,
 releases, Docker's images and volumes), and a disk resize grows it.
 
-Tried on DigitalOcean's Debian 13 and Ubuntu 26.04 images. Only for a
-new server: the
-conversion runs once, at its first boots, before anything is on the
-disk.
+Tried on DigitalOcean's and Vultr's Debian 13 and Ubuntu 26.04 images.
+Only for a new server: the conversion runs once, at its first boots,
+before anything is on the disk.
 
 1. Create the server with the file as its user data, nothing to edit:
    in DigitalOcean's control panel, "Advanced Options", "Add
-   Initialization scripts", pasted whole; or `doctl compute droplet
-   create ... --user-data-file cloud-init.yaml`.
+   Initialization scripts", pasted whole, or `doctl compute droplet
+   create ... --user-data-file cloud-init.yaml`; on Vultr, "Cloud-Init
+   User-Data", or `vultr-cli instance create ... --userdata-file
+   cloud-init.yaml`.
 2. It reboots twice on its own, about three minutes, then is ready:
    `findmnt /` says `xfs`, and `grep devopsy-xfs
    /var/log/cloud-init-output.log` ends with "done, the root is XFS",
    each line with its time.
-3. Run `setup.sh` as usual.
+3. Run `setup.sh` as usual, then reboot once: the kernel's memory for
+   kexec is freed from the next boot (the `base` step).
 
 What the server gets, by what the image had:
 
 ```
-Debian 13 (/boot in the root)
+DigitalOcean, Debian 13 (/boot in the root)
 vda1   /           XFS, the rest of the disk: everything
 vda2   /boot       ext4, 2 GiB: the image's own root, kept for GRUB
 vda14              BIOS boot, the image's
 vda15  /boot/efi   EFI system, the image's
 
-Ubuntu 26.04 (/boot on its own partition)
+DigitalOcean, Ubuntu 26.04 (/boot on its own partition)
 vda1   /           XFS, the rest of the disk: everything
 vda13  /boot       ext4, the image's
 vda14              BIOS boot, the image's
 vda15  /boot/efi   EFI system, the image's
+
+Vultr, Debian 13 and Ubuntu 26.04 (/boot in the root, EFI only)
+vda1   /boot/efi   EFI system, the image's
+vda2   /           XFS, the rest of the disk: everything
+vda3   /boot       ext4, 5 to 6 GiB: the image's own root, kept for GRUB
 ```
 
-On Ubuntu the old root's ext4 goes once the copy is done, and the XFS
-grows over its space.
+With `/boot` in the root, the ext4 holds the whole root until the copy
+is done, so it keeps 2 GiB or what the image needs then, in whole GiB
+(Vultr's images are larger). With `/boot` on its own partition, the old
+root's ext4 goes once the copy is done, and the XFS grows over its
+space. A swap file the provider made on the root (Vultr's `/swapfile`)
+is made again on the XFS, the same size.
 
 - **Updates work as on any server of the distribution:** kernel, GRUB
   and release upgrades write `/boot`, which GRUB reads as before; it
-  never reads XFS. Tried: a kernel upgrade, GRUB's packages reinstalled
-  (GRUB installs itself again then) and a kernel removed, each followed
-  by reboots, on both; on Debian an upgrade to the next release too
-  (Ubuntu 26.04 is offered none yet).
+  never reads XFS. Tried on DigitalOcean: a kernel upgrade, GRUB's
+  packages reinstalled (GRUB installs itself again then) and a kernel
+  removed, each followed by reboots, on both; on Debian an upgrade to
+  the next release too (Ubuntu 26.04 is offered none yet).
 - **Without `/boot` the server still boots** (`nofail`), reachable over
   SSH, and an update fails instead of writing where GRUB never looks:
   `/boot`'s mount point on the XFS is immutable (`chattr +i`).
@@ -116,7 +127,7 @@ grows over its space.
 
 | Step       | What it does |
 | ---------- | ------------ |
-| `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, on Ubuntu `coreutils-from-gnu` (devopsy's scripts expect GNU's coreutils, which Ubuntu may replace with Rust's), plus `DEVOPSY_APT_PACKAGES`. Turns off systemd-resolved's LLMNR and multicast DNS, name lookups on the local network that a server never needs (Debian's answers LLMNR on port 5355 of every address). |
+| `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, on Ubuntu `coreutils-from-gnu` (devopsy's scripts expect GNU's coreutils, which Ubuntu may replace with Rust's), plus `DEVOPSY_APT_PACKAGES`. Turns off systemd-resolved's LLMNR and multicast DNS, name lookups on the local network that a server never needs (Debian's answers LLMNR on port 5355 of every address). Frees the memory the kernel keeps for kexec, which a server never uses: `kho=off` on every server (Ubuntu 26.04's kernel turns Kexec HandOver on and keeps up to 1.25 of 2 GB for movable pages only; a kernel without it ignores the word), and no crash kernel where kdump-tools reserves one (Vultr's Ubuntu: 320 MB), kdump-tools disabled. Applied by the next reboot, which it asks for as a kernel update does (`/run/reboot-required`, taken by `DEVOPSY_AUTO_REBOOT_TIME`). |
 | `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
 | `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor (Debian's and Ubuntu's do; a rerun restarts a daemon that started without it). Rotated logs, `live-restore` and /24 address pools. Socket buffers of 7.5 MB (`net.core.rmem_max`, `wmem_max`), what a Cloudflare Tunnel's connector asks for. |
 | `user`     | Creates the deploy user in the `docker` group, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` gives it that directory for releases. |
@@ -163,6 +174,22 @@ systemctl try-restart systemd-resolved
 ```
 
 `ss -ltun 'sport = :5355'` then lists nothing: LLMNR is closed.
+
+The kernel's arguments, applied by the next reboot; the `crashkernel=`
+line and kdump-tools only where `/etc/default/grub.d/kdump-tools.cfg` is
+there:
+
+```sh
+cat > /etc/default/grub.d/zz-devopsy.cfg <<'EOF'
+GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")
+GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"
+EOF
+update-grub
+systemctl disable kdump-tools
+```
+
+After the reboot `grep CMA /proc/pagetypeinfo` shows no CMA blocks and
+`cat /sys/kernel/kexec_crash_size` says 0.
 
 ### swap
 

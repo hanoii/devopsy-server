@@ -3,28 +3,33 @@
 # (README.md, "An XFS root"). Converts the image's ext4 root to XFS on
 # the first boots, so every file on the server can be copied with
 # reflinks, then leaves the distribution as it is: the XFS root as
-# partition 1 (where DigitalOcean's restore of a snapshot expects it),
-# GRUB reading only ext4, and nothing of devopsy's behind. Then run
-# setup.sh as usual. Written for DigitalOcean's Debian 13 and Ubuntu
-# 26.04 images (GPT, booted by BIOS through GRUB), which differ in what
-# the conversion keeps of the ext4:
-# - /boot in the root (Debian): the ext4 stays as a 2 GiB /boot, its
-#   files at its top with boot -> . (GRUB finds /boot/grub there as it
-#   always did), and the XFS takes the root's partition number and
-#   PARTUUID (the kernel's root=PARTUUID=...). GRUB's BIOS core finds
-#   /boot by partition number, which that changes, so boot 1 installs
-#   one that finds it by UUID, and the last boot reinstalls GRUB as its
-#   updates do.
-# - /boot on its own partition (Ubuntu): GRUB never reads the root. The
-#   ext4 is shrunk to its minimum to hold the copy, then goes: the XFS
-#   takes its partition number, PARTUUID and filesystem UUID (the
-#   kernel's root=UUID=...), and the space it held stays unused before
-#   the root (XFS grows only at its end).
+# partition 1 where the root was (DigitalOcean's restore of a snapshot
+# expects it), GRUB reading only ext4, and nothing of devopsy's behind.
+# Then run setup.sh as usual. Written for DigitalOcean's and Vultr's
+# Debian 13 and Ubuntu 26.04 images (GPT; GRUB by BIOS and EFI on
+# DigitalOcean, by EFI alone on Vultr), which differ in what the
+# conversion keeps of the ext4:
+# - /boot in the root (DigitalOcean's Debian, both of Vultr's): the
+#   ext4 stays as /boot (2 GiB, or what a larger image's root needs),
+#   its files at its top with boot -> . (GRUB finds /boot/grub there as
+#   it always did), and the XFS takes the root's partition number and
+#   PARTUUID (the kernel's root=PARTUUID=..., which a kernel finding it
+#   by the ext4's UUID is switched to until the last boot). GRUB's BIOS
+#   core finds /boot by partition number, which that changes, so boot 1
+#   installs one that finds it by UUID, and the last boot reinstalls
+#   GRUB as its updates do; EFI's finds it by UUID already.
+# - /boot on its own partition (DigitalOcean's Ubuntu): GRUB never reads
+#   the root. The ext4 is shrunk to its minimum and moved to the end of
+#   the disk to hold the copy, then goes: the XFS takes its partition
+#   number, PARTUUID and filesystem UUID (the kernel's root=UUID=...),
+#   and grows over the space it held.
 #
 # Boot 1 (cloud-init): the root fills the disk already (growroot or
-# cloud-init's growpart). Note the layout, put a one-time conversion into
-# the initramfs (initramfs-tools on Debian, dracut on Ubuntu, both
-# through update-initramfs) and reboot.
+# cloud-init's growpart). Note the layout, set the kernel's arguments for
+# the conversion (kho=off, the root by PARTUUID), put a one-time
+# conversion into the initramfs (initramfs-tools on Debian, dracut on
+# Ubuntu, both through update-initramfs), remove swap files on the root
+# and reboot.
 # Boot 2 (initramfs, before the root is mounted), in phases that each
 # survive a cut and resume on the next boot:
 # 1. shrink the ext4 and make the rest a partition;
@@ -38,13 +43,25 @@
 # ever). Messages go to the serial console.
 # Boot 3: a plain boot on XFS. A per-boot script empties the copy of
 # /boot the root kept under its mount point, removes the conversion and
-# itself, and rebuilds the initramfs and GRUB's config as their updates
-# do. Its lines and boot 1's, with their times, are in
+# itself, rebuilds the initramfs and GRUB's config as their updates do
+# (the kernel's arguments as the image had them) and makes the swap
+# files again. Its lines and boot 1's, with their times, are in
 # /var/log/cloud-init-output.log.
 # Later: a disk resize grows the root as on any server of the
 # distribution, and kernel and GRUB updates write /boot as they always
 # did.
 packages: [xfsprogs, gdisk]
+# apt's daily timers stay off on the boots that run the conversion's
+# scripts (the first, and the last while its script is there), and start
+# again once it is done or refused: on a first boot Ubuntu's
+# unattended-upgrades upgraded systemd and restarted the services,
+# cloud-init with them, which never got to the reboot (Vultr, 2026-10-29).
+# bootcmd runs before the network is up, so their jobs are still queued.
+bootcmd:
+  - |
+    if [ ! -e /var/lib/cloud/instance/sem/config_write_files ] || [ -e /var/lib/cloud/scripts/per-boot/devopsy-xfs-finish ]; then
+      systemctl stop apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
+    fi
 write_files:
   - path: /usr/local/lib/devopsy-xfs/convert
     permissions: "0755"
@@ -116,8 +133,16 @@ write_files:
         e2fsck -fy "$root"; rc=$?
         [ "$rc" -le 1 ] || { say "e2fsck failed ($rc), not converting"; exit 0; }
         if [ "$MODE" = boot-in-root ]; then
-          resize2fs "$root" 2G || { say "resize2fs failed, not converting"; exit 0; }
-          end=$((start + 2 * gib - 1))
+          # It holds the whole root until phase 3: 2 GiB, or what a larger
+          # image needs (resize2fs's minimum, which has room to spare) in
+          # whole GiB.
+          bs=$(dumpe2fs -h "$root" 2>/dev/null | sed -n 's/^Block size: *//p')
+          min=$(resize2fs -P "$root" 2>/dev/null | sed -n 's/^Estimated minimum size of the filesystem: *//p')
+          [ -n "$bs" ] && [ -n "$min" ] || { say "cannot read $root's size, not converting"; exit 0; }
+          bootg=$(((min * bs + 1073741823) / 1073741824)); [ "$bootg" -ge 2 ] || bootg=2
+          [ $((last - start)) -ge $(((bootg + 5) * gib)) ] || { say "disk too small, not converting"; exit 0; }
+          resize2fs "$root" "${bootg}G" || { say "resize2fs failed, not converting"; exit 0; }
+          end=$((start + bootg * gib - 1))
           xnum=$(free_num)
           say "XFS partition $xnum on $disk"
           # The same start, type and PARTUUID: still the root until phase 4.
@@ -173,16 +198,18 @@ write_files:
       if [ "$state" = new ]; then
         # Phase 2: the whole root into a new XFS, its fstab rewritten: the
         # root's line for XFS (by the filesystem UUID the XFS takes, with
-        # /boot apart), and with /boot in the root a line for the ext4.
+        # /boot apart), and with /boot in the root a line for the ext4, the
+        # root's by the XFS's own UUID if it named the ext4's.
         say "copying the root into XFS on $xfs"
         mkfs.xfs -f "$xfs" || { say "mkfs.xfs failed, booting on ext4"; exit 0; }
         modprobe -q xfs || true
         mount -t ext4 -o ro "$ext" "$e" || { say "cannot mount $ext, booting on ext4"; exit 0; }
         mount -t xfs "$xfs" /devopsy/root || { umount "$e"; say "cannot mount $xfs, booting on ext4"; exit 0; }
-        fs=$(blkid -p -s UUID -o value "$ext")
-        if cp -ax "$e/." /devopsy/root/ && [ -n "$fs" ] &&
-          awk -v fs="$fs" -v mode="$MODE" '$2 == "/" {
+        fs=$(blkid -p -s UUID -o value "$ext"); xu=$(blkid -p -s UUID -o value "$xfs")
+        if cp -ax "$e/." /devopsy/root/ && [ -n "$fs" ] && [ -n "$xu" ] &&
+          awk -v fs="$fs" -v xu="$xu" -v mode="$MODE" '$1 !~ /^#/ && $2 == "/" {
               if (mode == "boot-separate") $1 = "UUID=" fs
+              else if ($1 == "UUID=" fs) $1 = "UUID=" xu
               $3 = "xfs"; $4 = "defaults,x-systemd.growfs"; $6 = 0; print
               if (mode == "boot-in-root") print "UUID=" fs " /boot ext4 defaults,nofail,discard,errors=remount-ro 0 2"
               next
@@ -314,6 +341,9 @@ write_files:
         exit 0
       fi
       [ "$(findmnt -no FSTYPE /boot)" = ext4 ] || { say "/boot is not mounted" >&2; exit 1; }
+      SWAPS=
+      # shellcheck disable=SC1091 # boot 1 writes it
+      [ -f /etc/devopsy-xfs.conf ] && . /etc/devopsy-xfs.conf
       say "finishing the conversion"
       mkdir -p /run/devopsy-xfs
       mount --bind / /run/devopsy-xfs
@@ -323,19 +353,29 @@ write_files:
       umount /run/devopsy-xfs
       rm -rf /etc/initramfs-tools/hooks/devopsy-xfs /etc/initramfs-tools/scripts/local-premount/devopsy-xfs \
         /usr/lib/dracut/modules.d/99devopsy-xfs /etc/dracut.conf.d/devopsy-xfs.conf \
-        /usr/local/lib/devopsy-xfs /etc/devopsy-xfs.conf
+        /etc/default/grub.d/90-devopsy-xfs.cfg /usr/local/lib/devopsy-xfs /etc/devopsy-xfs.conf
       update-initramfs -u -k all
       if dpkg -s grub-cloud-amd64 >/dev/null 2>&1; then
         dpkg-reconfigure -f noninteractive grub-cloud-amd64
       fi
       update-grub
+      # The swap files boot 1 removed, made again as they were (their fstab
+      # lines stayed).
+      for s in $SWAPS; do
+        f=${s%:*}
+        swapon --show=NAME --noheadings | grep -qx "$f" && continue
+        say "making $f again"
+        rm -f "$f"; fallocate -l "${s##*:}" "$f"; chmod 600 "$f"; mkswap "$f" >/dev/null; swapon "$f"
+      done
       rm -f "$0"
+      systemctl start apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
       say "done, the root is XFS"
 runcmd:
   - |
     # The release and the kernel's root= checked, the layout, then (with
-    # /boot in the root) the GRUB core that finds the ext4 by UUID, then
-    # the conversion into the initramfs, checked there; any of it failing,
+    # /boot in the root) the GRUB core that finds the ext4 by UUID, the
+    # kernel's arguments, the conversion into the initramfs, checked there,
+    # and last the swap files on the root removed; any of it failing,
     # nothing of it is left to run later.
     say() { echo "$(date -u '+%F %T') devopsy-xfs: $*"; }
     # Only what was tried: a new release is tried before it is added.
@@ -362,15 +402,51 @@ runcmd:
     }
     mode=boot-in-root
     if mountpoint -q /boot; then mode=boot-separate; fi
+    # BIOS GRUB only: an EFI one's config finds /boot by its UUID, which the
+    # ext4 keeps.
     core() {
+      [ -d /boot/grub/i386-pc ] || return 0
       disk=/dev/$(lsblk -no PKNAME "$(findmnt -no SOURCE /)") && fs=$(findmnt -no UUID /) &&
         printf 'search.fs_uuid %s root\nset prefix=($root)/boot/grub\n' "$fs" >/run/devopsy-xfs.cfg &&
         grub-mkimage -O i386-pc -o /boot/grub/i386-pc/core.img -c /run/devopsy-xfs.cfg -p /boot/grub \
           biosdisk part_gpt ext2 search_fs_uuid &&
         /usr/lib/grub/i386-pc/grub-bios-setup -d /boot/grub/i386-pc "$disk"
     }
+    # The kernel's arguments until the last boot, which removes them:
+    # kho=off, since Ubuntu 26.04's kernel keeps Kexec HandOver's scratch
+    # memory (1.25 of 2 GiB on Vultr) for movable pages only, and the copy's
+    # kernel memory ran out in the initramfs (Vultr, 2026-10-29); and with
+    # /boot in the root, a kernel finding it by the ext4's filesystem UUID,
+    # which /boot keeps, finds it by PARTUUID, which the XFS takes.
+    kernel_args() {
+      pu=
+      if [ "$mode" = boot-in-root ]; then
+        case $spec in UUID=*) pu=$(lsblk -no PARTUUID "$(findmnt -no SOURCE /)") && [ -n "$pu" ] || return 1 ;; esac
+      fi
+      mkdir -p /etc/default/grub.d && {
+        # shellcheck disable=SC2016 # grub-mkconfig expands it
+        echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"'
+        [ -z "$pu" ] || printf 'GRUB_DISABLE_LINUX_UUID=true\nGRUB_DISABLE_LINUX_PARTUUID=false\n'
+      } >/etc/default/grub.d/90-devopsy-xfs.cfg && update-grub &&
+        grep -q ' kho=off' /boot/grub/grub.cfg && { [ -z "$pu" ] || grep -q "root=PARTUUID=$pu " /boot/grub/grub.cfg; } ||
+        { say "cannot set the kernel's arguments for the conversion" >&2; return 1; }
+    }
+    # Swap files on the root (a provider's) would not fit the ext4's shrink:
+    # removed, and made again by the last boot, their fstab lines kept.
+    swaps=
+    unswap() {
+      for f in $(swapon --show=NAME,TYPE --noheadings --raw | awk '$2 == "file" { print $1 }'); do
+        [ "$(findmnt -no TARGET -T "$f")" = / ] && swaps="$swaps $f:$(stat -c %s "$f")"
+      done
+      [ -n "$swaps" ] || return 0
+      echo "SWAPS=\"${swaps# }\"" >>/etc/devopsy-xfs.conf || return 1
+      for s in $swaps; do
+        swapoff "${s%:*}" && rm -f "${s%:*}" || return 1
+        say "removed ${s%:*}, made again once the root is XFS"
+      done
+    }
     if supported && root_spec && echo "MODE=$mode" >/etc/devopsy-xfs.conf &&
-      { [ "$mode" = boot-separate ] || core; } && update-initramfs -u && in_initramfs; then
+      { [ "$mode" = boot-separate ] || core; } && kernel_args && update-initramfs -u && in_initramfs && unswap; then
       say "converting on the next boot ($mode)"
     else
       say "not converting" >&2
@@ -378,6 +454,15 @@ runcmd:
         /usr/lib/dracut/modules.d/99devopsy-xfs /etc/dracut.conf.d/devopsy-xfs.conf \
         /usr/local/lib/devopsy-xfs /etc/devopsy-xfs.conf /var/lib/cloud/scripts/per-boot/devopsy-xfs-finish
       update-initramfs -u
+      if [ -f /etc/default/grub.d/90-devopsy-xfs.cfg ]; then
+        rm -f /etc/default/grub.d/90-devopsy-xfs.cfg; update-grub
+      fi
+      for s in $swaps; do
+        f=${s%:*}
+        swapon --show=NAME --noheadings | grep -qx "$f" && continue
+        rm -f "$f"; fallocate -l "${s##*:}" "$f"; chmod 600 "$f"; mkswap "$f" >/dev/null; swapon "$f"
+      done
+      systemctl start apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
     fi
 power_state:
   mode: reboot

@@ -202,6 +202,43 @@ EOF
     log "base: restarting systemd-resolved: no LLMNR or multicast DNS"
     systemctl restart systemd-resolved
   fi
+
+  # Memory the kernel keeps for kexec, which nothing on a server uses:
+  # Kexec HandOver's scratch memory, held for movable pages only by a
+  # kernel that turns it on by default (Ubuntu 26.04's: 646 MB of 2 GB on
+  # DigitalOcean, 1.25 GB on Vultr), which page tables, slab and socket
+  # buffers cannot use: kho=off on every server, so a later kernel with it
+  # on (a release upgrade) has it from its first boot, and one without it
+  # passes the word to init, which ignores it. And kdump's crash kernel,
+  # where kdump-tools adds crashkernel= (Vultr's Ubuntu: 320 MB), its
+  # service disabled, since it fails without that memory. A drop-in after
+  # the image's (zz-), applied by the next reboot, which the restart flag
+  # asks for as a kernel update does (DEVOPSY_AUTO_REBOOT_TIME takes it).
+  # GRUB's config is updated while it does not say so yet, so a first run
+  # cut after writing is applied by the next, and an applied one updates
+  # nothing.
+  local grubd=/etc/default/grub.d grubcfg=/boot/grub/grub.cfg kdump='' stale=''
+  if [ -f "$grubd/kdump-tools.cfg" ]; then kdump=1; fi
+  # shellcheck disable=SC2016 # grub-mkconfig expands them
+  {
+    echo '# Written by devopsy-server (setup.sh, base): no memory for kexec.'
+    [ -z "$kdump" ] || echo 'GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")'
+    echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"'
+  } | write_file "$grubd/zz-devopsy.cfg" || true
+  if [ -f "$grubcfg" ]; then
+    if ! grep -q ' kho=off' "$grubcfg"; then stale=1; fi
+    if [ -n "$kdump" ] && grep -q ' crashkernel=' "$grubcfg"; then stale=1; fi
+  fi
+  if [ -n "$stale" ] && command -v update-grub >/dev/null; then
+    log "base: updating GRUB: no memory for kexec from the next reboot"
+    update-grub >/dev/null 2>&1 || die "update-grub failed"
+    echo '*** System restart required ***' >/run/reboot-required
+    grep -qsx devopsy-server /run/reboot-required.pkgs || echo devopsy-server >>/run/reboot-required.pkgs
+  fi
+  if [ -n "$kdump" ] && systemctl is-enabled --quiet kdump-tools.service 2>/dev/null; then
+    log "base: disabling kdump-tools"
+    systemctl disable --quiet kdump-tools.service
+  fi
 }
 
 step_swap() {

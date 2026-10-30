@@ -97,6 +97,34 @@ XFS root", "Without the script" (each step by hand: a change to a
   resolved restarts when the file was written, or while 5355 is still
   open (a first run cut after writing), so a rerun restarts nothing.
   `test/run.sh` checks it (below).
+- **The `base` step frees the memory the kernel keeps for kexec**
+  (`/etc/default/grub.d/zz-devopsy.cfg`, after the image's drop-ins):
+  `kho=off` on every server, and `crashkernel=` taken out where
+  `kdump-tools.cfg` adds it, kdump-tools' service disabled (it fails
+  without the memory). Ubuntu 26.04's kernel (7.0) turns
+  Kexec HandOver on and marks its scratch memory CMA, for movable pages
+  only, so page tables, slab and socket buffers share the rest: 646 MB
+  of 2 GB on DigitalOcean, 1.25 GB on Vultr, where its image also
+  reserves 320 MB for kdump (checked 2026-10-29; DigitalOcean's has no
+  kdump). Nothing on a devopsy server kexecs, so not a setting, as the
+  socket buffers below. On every server, not only where a kernel has
+  `CONFIG_KEXEC_HANDOVER_ENABLE_DEFAULT=y` (decided with the user): a
+  later kernel with it on, a Debian release upgrade, has it from its
+  first boot without a rerun, and Debian 13's 6.12, without KHO, passes
+  the word to user space ("Unknown kernel command line parameters"),
+  which ignores it (checked on Vultr). Kept, not purged: Vultr's
+  `ubuntu-server-minimal` depends on `kdump-tools`. Applied by the next
+  reboot: setup.sh never reboots (a rerun on a live server would take
+  its sites down), and raises the restart flag a kernel update does
+  (`/run/reboot-required`, `devopsy-server` in its `.pkgs`), which
+  unattended-upgrades takes at `DEVOPSY_AUTO_REBOOT_TIME` even on a day
+  with nothing to upgrade (its 2.12's `reboot_if_requested_and_needed`,
+  after every run that writes its stamp). `update-grub` runs while
+  GRUB's config does not say so yet, never only when the drop-in was
+  written, so a run cut between the two is finished by the next.
+  Checked on Vultr's Ubuntu: no CMA block and 320 MB more after the
+  reboot, the system `running`. The XFS conversion turns KHO off for its own boots
+  too (above, "The XFS root").
 - **The `docker` step raises the socket buffers to 7.5 MB**
   (`/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and
   `wmem_max`), for QUIC: a Cloudflare Tunnel's connector (`cloudflared`,
@@ -175,9 +203,10 @@ goes; here are the decisions and the findings.
   ext4. A new release is tried on DigitalOcean, then added to both
   lists.
 - **By layout, not by distribution:** boot 1 notes whether `/boot` is
-  its own mount (`MODE`, `/etc/devopsy-xfs.conf`): Debian 13's image
-  has `/boot` in the root (`boot-in-root`), Ubuntu 26.04's on a
-  partition of its own (`boot-separate`). One script converts both
+  its own mount (`MODE`, `/etc/devopsy-xfs.conf`): DigitalOcean's
+  Debian 13 has `/boot` in the root (`boot-in-root`), its Ubuntu 26.04
+  on a partition of its own (`boot-separate`); Vultr's both in the
+  root. One script converts both
   (`/usr/local/lib/devopsy-xfs/convert`), run from the initramfs by
   whichever builds it: initramfs-tools' `local-premount` on Debian,
   dracut's `pre-mount` on Ubuntu, both through `update-initramfs`
@@ -265,7 +294,56 @@ goes; here are the decisions and the findings.
   s against 7.1 to 7.8, deleting them 1.0 s against 2.5, random 16k
   writes 19.7k against 23.8k IOPS; a reflink copy of a 650 MB database
   0.03 s. Swap on a `fallocate`d file works (`setup.sh`'s swap step).
-- **Tested on DigitalOcean only** (2026-10-26). Ubuntu 26.04 (kernel
+- **Vultr's images differ** (2026-10-29, `vhp-2c-2gb-amd`, 60 GB):
+  EFI only (no BIOS boot partition, `grub-efi-amd64` alone), `/boot` in
+  the root on both releases, the kernel's `root=UUID=` the ext4's
+  filesystem UUID, a `/swapfile` from Vultr's vendor data (100 MB per
+  GB of root, once per instance) and roots larger than 2 GiB. So boot
+  1 installs the BIOS core only where `/boot/grub/i386-pc` is (the EFI
+  config finds `/boot` by the filesystem UUID, which the ext4 keeps);
+  the kernel finds the root by PARTUUID through a drop-in
+  (`/etc/default/grub.d/90-devopsy-xfs.cfg`: `GRUB_DISABLE_LINUX_UUID`,
+  `GRUB_DISABLE_LINUX_PARTUUID=false`), since the ext4 keeps the UUID
+  it was found by, and the last boot removes it before its
+  `update-grub` (back to `root=UUID=`, the XFS's); swap files on the
+  root go last, after every check, and the last boot makes them again,
+  their fstab lines kept. `/boot` is `resize2fs -P`'s minimum in whole
+  GiB, at least 2: 5 and 6 GiB there, no margin of our own (a half GiB
+  made DigitalOcean's 3). The fstab rewrite skips comments (Debian's
+  installer leaves `# / was on /dev/vda2 during installation`, which
+  the awk took for the root's line) and names the XFS by its own UUID
+  where the root's line named the ext4's.
+- **`kho=off` on the conversion's boots:** Ubuntu 26.04's kernel (7.0)
+  has Kexec HandOver on by default (`CONFIG_KEXEC_HANDOVER_ENABLE_DEFAULT`),
+  and marks its scratch memory CMA, for movable pages only: 626
+  pageblocks, 1.25 of 2 GiB on Vultr (`/proc/pagetypeinfo`; `CmaTotal`
+  0, `CmaFree` 830 MB once booted). In the initramfs the copy's kernel
+  memory (slab, some 400 MB left) ran out: the OOM killer took `cp` and
+  the hook, and once the kernel panicked "deadlocked on memory" and
+  stayed there. With `kho=off` no CMA block is left (checked). The same
+  drop-in carries it on every layout; Debian's 6.12 has no KHO and
+  passes the argument to init, which ignores it. DigitalOcean's 512 MB
+  Ubuntu converted without it (not looked into why).
+- **apt's timers stay off on the conversion's cloud-init boots**
+  (`bootcmd`: the first, `sem/config_write_files` missing, and the last
+  while the finish script is there; started again by it and by a
+  refusal): on Vultr's Ubuntu, unattended-upgrades
+  (`apt-daily-upgrade.service`, some 10 s into cloud-init's final
+  stage) upgraded systemd, which re-executed and restarted services,
+  `cloud-init-main.service` among them, so cloud-init died in runcmd
+  and never reached `power_state`. bootcmd runs before
+  `network-online.target`, which their jobs wait for, so stopping them
+  cancels the jobs.
+- **Vultr's Ubuntu runs uutils' coreutils** (`coreutils-from-uutils`)
+  but keeps GNU's `cp`, `mv` and `rm` (`gnucp`...), so the
+  initramfs's `cp -al` and `mv -T --exchange` are GNU's; `ln`, `mkdir`
+  and `dd` are uutils' (`dd` only on the `boot-separate` path).
+- **Tested on Vultr** (2026-10-29): Debian 13 and Ubuntu 26.04, the
+  conversion at 60 GB (each from the final file in one go, about two
+  minutes), a reboot after it, `setup.sh` and `--server-info`
+  (reflinks); no updates, release or provider snapshot.
+- **Tested on DigitalOcean** (2026-10-26; the conversion again on both
+  with Vultr's changes, 2026-10-29). Ubuntu 26.04 (kernel
   7.0, GRUB 2.14, dracut 110): the conversion at 10 GB (8.9 GiB XFS,
   nothing unused), and resumed after a failure past phase 1 (the
   missing XFS driver); a kernel upgrade, GRUB's packages reinstalled
@@ -299,6 +377,7 @@ for p in $(docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 \
     ".write_files[] | select(.path == \"$p\") | .content" cloud-init.yaml >"/tmp/ci/$i-${p##*/}"
 done
 { echo '#!/bin/sh'; docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 '.runcmd[0]' cloud-init.yaml; } >/tmp/ci/runcmd
+{ echo '#!/bin/sh'; docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 '.bootcmd[0]' cloud-init.yaml; } >/tmp/ci/bootcmd
 docker run --rm -v /tmp/ci:/mnt -w /mnt koalaman/shellcheck:stable -S warning $(ls /tmp/ci)
 ```
 
@@ -318,8 +397,11 @@ once, each in a privileged container with systemd as its first process
 and its own Docker (`test/Dockerfile`, systemd-resolved added as cloud
 images have it), and checks what the first run set up (Docker, the
 deploy user and its keys, devopsy, the socket buffers, LLMNR closed:
-open before on Debian, so the check means something) and that the
-second wrote, created and restarted nothing. About a minute locally;
+open before on Debian, so the check means something; the kernel's
+arguments for kexec's memory and the restart flag, from kdump's
+drop-in and an `update-grub` planted in both, which builds GRUB's config
+from the drop-ins) and that the second wrote, created, restarted and updated
+nothing. About a minute locally;
 `test/run.sh ubuntu:26.04` runs one. A new check goes there, and a new
 supported release is a line of its default list and of the workflow's
 matrix. What it cannot show: AppArmor (the container shares the host's

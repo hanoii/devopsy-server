@@ -69,6 +69,19 @@ test_one() {
       ;;
   esac
 
+  # kdump's drop-in, GRUB's config and an update-grub that builds it from
+  # the drop-ins, as grub-mkconfig does, and counts its runs.
+  # shellcheck disable=SC2016 # expanded in the container
+  x sh -c 'mkdir -p /boot/grub /etc/default/grub.d &&
+    echo "linux /vmlinuz root=/dev/vda1 ro crashkernel=320M" >/boot/grub/grub.cfg &&
+    echo "GRUB_CMDLINE_LINUX_DEFAULT=\"\$GRUB_CMDLINE_LINUX_DEFAULT crashkernel=2G-4G:320M\"" >/etc/default/grub.d/kdump-tools.cfg &&
+    printf "%s\n" "#!/bin/sh" "echo run >>/tmp/update-grub.runs" "GRUB_CMDLINE_LINUX_DEFAULT=quiet" \
+      "for f in /etc/default/grub.d/*.cfg; do . \"\$f\"; done" \
+      "echo \"linux /vmlinuz root=/dev/vda1 ro \$GRUB_CMDLINE_LINUX_DEFAULT\" >/boot/grub/grub.cfg" \
+      >/usr/local/sbin/update-grub && chmod 755 /usr/local/sbin/update-grub &&
+    printf "%s\n" "[Service]" "Type=oneshot" "ExecStart=/bin/true" "[Install]" "WantedBy=multi-user.target" \
+      >/etc/systemd/system/kdump-tools.service && systemctl enable --quiet kdump-tools.service'
+
   echo "== $base: first run"
   x bash /src/setup.sh || fail "the first run failed"
   x systemctl is-active --quiet docker || fail "Docker is not running"
@@ -90,6 +103,14 @@ test_one() {
   if x ss -Hltun 'sport = :5355' | grep .; then
     fail "LLMNR is still open"
   fi
+  x grep -q ' kho=off' /boot/grub/grub.cfg || fail "GRUB's config lacks kho=off"
+  if x grep crashkernel= /boot/grub/grub.cfg; then
+    fail "GRUB's config still reserves a crash kernel"
+  fi
+  if x systemctl is-enabled --quiet kdump-tools.service; then
+    fail "kdump-tools is still enabled"
+  fi
+  x grep -qx devopsy-server /run/reboot-required.pkgs || fail "no restart asked for the kernel's arguments"
 
   echo "== $base: second run"
   x bash /src/setup.sh >"$out/$name.second" 2>&1 || {
@@ -98,9 +119,10 @@ test_one() {
   }
   cat "$out/$name.second"
   # What only a change logs: every run upgrades the packages and devopsy.
-  if grep -E 'wrote |restarting|user: creating|cli: installing|linked' "$out/$name.second"; then
+  if grep -E 'wrote |restarting|updating|disabling|user: creating|cli: installing|linked' "$out/$name.second"; then
     fail "the second run changed something"
   fi
+  [ "$(x sh -c 'wc -l </tmp/update-grub.runs')" = 1 ] || fail "update-grub did not run exactly once"
   rm -f "$out/$name.second"
   echo "== $base: ok"
 }

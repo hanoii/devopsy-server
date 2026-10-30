@@ -32,6 +32,7 @@ jobs:
               ".write_files[] | select(.path == \"$p\") | .content" cloud-init.yaml >"/tmp/ci/$i-${p##*/}"
           done
           { echo '#!/bin/sh'; docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 '.runcmd[0]' cloud-init.yaml; } >/tmp/ci/runcmd
+          { echo '#!/bin/sh'; docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 '.bootcmd[0]' cloud-init.yaml; } >/tmp/ci/bootcmd
           cd /tmp/ci && docker run --rm -v /tmp/ci:/mnt -w /mnt koalaman/shellcheck:stable -S warning -- *
 
   cloud-init:
