@@ -247,7 +247,11 @@ EOF
     if [ "$kdump" = off ] && grep -q ' crashkernel=' "$grubcfg"; then
       stale=1
       mb=$(($(cat /sys/kernel/kexec_crash_size 2>/dev/null || echo 0) / 1048576))
-      log "base: no crash kernel from the next reboot (DEVOPSY_KDUMP=off): frees the $mb MB kdump reserves"
+      if [ "$mb" -gt 0 ]; then
+        log "base: no crash kernel from the next reboot (DEVOPSY_KDUMP=off): frees the $mb MB kdump reserves"
+      else
+        log "base: no crash kernel from the next reboot (DEVOPSY_KDUMP=off)"
+      fi
     elif [ "$kdump" = on ] && ! grep -q ' crashkernel=' "$grubcfg"; then
       stale=1
       log "base: kdump's crash kernel back from the next reboot (DEVOPSY_KDUMP=on)"
