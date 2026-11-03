@@ -21,11 +21,11 @@ printf '[Resolve]\nLLMNR=no\nMulticastDNS=no\n' > /etc/systemd/resolved.conf.d/9
 systemctl try-restart systemd-resolved
 ```
 
-`ss -ltun 'sport = :5355'` then lists nothing: LLMNR is closed.
+LLMNR is closed once `ss -ltun 'sport = :5355'` lists nothing.
 
-The kernel's arguments, applied by the next reboot; the `crashkernel=`
-line and kdump-tools only with `DEVOPSY_KDUMP=off`, where
-`/etc/default/grub.d/kdump-tools.cfg` is there:
+The kernel's arguments, applied by the next reboot. With
+`DEVOPSY_KDUMP=off`, and only where `/etc/default/grub.d/kdump-tools.cfg`
+exists, also the `crashkernel=` line and kdump-tools:
 
 ```sh
 cat > /etc/default/grub.d/zz-devopsy.cfg <<'EOF'
@@ -105,11 +105,13 @@ sysctl -p /etc/sysctl.d/90-devopsy-net.conf
 ```
 
 Rotated logs keep containers from filling the disk, and `live-restore`
-keeps them running while Docker upgrades. Address pools: see ["Docker
-networks"](things-to-know.md#docker-networks). The socket buffers are for QUIC: a Cloudflare Tunnel's
-connector (`cloudflared`) asks the kernel for 7.5 MB and runs with
-smaller buffers, warning, where the default maximum is about 200 KB; the
-setting is the host's, containers get it, and it changes nothing without
+keeps them running while Docker upgrades. For the address pools, see
+["Docker networks"](things-to-know.md#docker-networks).
+
+The socket buffers are for QUIC. A Cloudflare Tunnel's connector
+(`cloudflared`) asks the kernel for 7.5 MB, and where the default
+maximum is about 200 KB it runs with smaller buffers and warns. The
+setting is host-wide, so containers get it, and it has no effect without
 a tunnel.
 
 ## user
