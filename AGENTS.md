@@ -89,7 +89,7 @@ devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for [devopsy](https://g
 - Settings are validated, then saved, before any step runs (`validate_settings`, `save_settings`): a failed run remembers them, and a typo never sticks.
 - A setting applies its state on every run, both ways (for example `DEVOPSY_KDUMP=on` puts back what `off` took away).
 - Never change the SSH server's configuration: providers set it up, and a mistake there locks the operator out.
-- No host firewall: the provider's covers it (README.md).
+- No host firewall: the provider's covers it (`docs/things-to-know.md`).
 - Debian 13 and Ubuntu 26.04 only, through apt and systemd directly, with no configuration management: each release is tested before `preflight` lists it, and `DEVOPSY_FORCE=1` runs on any other.
 - Docker's apt repository is per distribution, `download.docker.com/linux/$ID`.
 - On Ubuntu GNU's coreutils stay the active ones (`coreutils-from-gnu`), since devopsy-cli's scripts on servers expect them (for example GNU `tail`, `mv -T`).

@@ -63,7 +63,8 @@ On a new server, `cloud-init.yaml` can first convert its root to XFS
 | `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13 or Ubuntu 26.04. Not saved. |
 
 Traefik's settings (ACME email, resolvers, the wildcard domain) are
-devopsy-template-traefik's; see its README and docs.
+devopsy-template-traefik's; see its [Running
+Traefik](https://github.com/hanoii/devopsy-template-traefik/blob/main/docs/running.md#settings).
 
 ## Deploying from CI
 
