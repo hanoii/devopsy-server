@@ -2,9 +2,9 @@
 
 What a devopsy server is protected by, and what stays yours. This is the
 host's half; what Cloudflare's edge covers for sites served through a
-tunnel, and what it does not, is the Traefik template's README, ["Behind
+tunnel, and what it does not, is the Traefik template's ["Behind
 a Cloudflare
-Tunnel"](https://github.com/hanoii/devopsy-template-traefik#behind-a-cloudflare-tunnel).
+Tunnel"](https://github.com/hanoii/devopsy-template-traefik/blob/main/docs/tunnel.md).
 
 ## The firewall is your provider's
 
@@ -12,7 +12,7 @@ Open inbound only what the server serves: SSH; 80 and 443 only for sites served 
 
 ## SSH is left alone, and whoever has a key has the server
 
-`setup.sh` never changes the SSH server: set it up as your provider does, with key login only, and check it (`sshd -T | grep -i passwordauthentication` says `no`). The deploy user is in the `docker` group, which is root through Docker, and it got root's authorized keys at setup. From then on `devopsy @<server> --ssh-keys` lists, adds and removes its keys from your machine; a machine's key (CI) gets `add --restricted`, which allows commands only, no shell (devopsy-cli's README, "Keys on a server"). Nothing on the server knows your repository: releases are pushed over SSH, and nothing listens for webhooks.
+`setup.sh` never changes the SSH server: set it up as your provider does, with key login only, and check it (`sshd -T | grep -i passwordauthentication` says `no`). The deploy user is in the `docker` group, which is root through Docker, and it got root's authorized keys at setup. From then on `devopsy @<server> --ssh-keys` lists, adds and removes its keys from your machine; a machine's key (CI) gets `add --restricted`, which allows commands only, no shell (devopsy-cli's [Keys on a server](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#keys-on-a-server)). Nothing on the server knows your repository: releases are pushed over SSH, and nothing listens for webhooks.
 
 ## Security updates
 
@@ -28,7 +28,7 @@ Every service in the devopsy templates runs as a fixed non-root UID (apps as 100
 
 ## An environment nobody releases gets no fixes
 
-Images float on their series (`mariadb:11.8`, `traefik:v3.7`) and are pulled again only by a release, so an environment left alone for weeks runs what it pulled last: release each, Traefik included, on a schedule from CI with the restricted key (devopsy-cli's README, "Environments nobody releases").
+Images float on their series (`mariadb:11.8`, `traefik:v3.7`) and are pulled again only by a release, so an environment left alone for weeks runs what it pulled last: release each, Traefik included, on a schedule from CI with the restricted key (devopsy-cli's [Environments nobody releases](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#environments-nobody-releases)).
 
 ## What stays yours
 
