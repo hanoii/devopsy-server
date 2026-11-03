@@ -6,7 +6,8 @@ devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for [devopsy](https://g
 
 - `setup.sh`: the settings (`load_settings`, `validate_settings`, `save_settings`, `usage`), `preflight`, then one `step_*` function per step, run in order by `main`.
 - `cloud-init.yaml`: the XFS conversion, its scripts in `write_files` (`internals/xfs.md`).
-- `test/run.sh` and `test/Dockerfile`: `setup.sh` run in containers (Checks); `.github/workflows/`: `lint.yml` and `setup.yml`.
+- `test/run.sh` and `test/Dockerfile` run `setup.sh` in containers (Checks).
+- `.github/workflows/` holds `lint.yml` and `setup.yml`.
 - `README.md` and `docs/` are the user-facing behavior, kept in step with every change: the README's steps and settings tables, `docs/xfs.md`, `docs/without-the-script.md` (each step by hand, so a change to a `step_*` function changes its commands there) and `docs/things-to-know.md`.
 
 ## Rules
@@ -20,6 +21,7 @@ devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for [devopsy](https://g
 - Never change the SSH server's configuration: providers set it up, and a mistake there locks the operator out.
 - No host firewall: the provider's covers it (README.md).
 - Debian 13 and Ubuntu 26.04 only, through apt and systemd directly, with no configuration management: each release is tested before `preflight` lists it, and `DEVOPSY_FORCE=1` runs on any other.
+- Docker's apt repository is per distribution, `download.docker.com/linux/$ID`.
 - On Ubuntu GNU's coreutils stay the active ones (`coreutils-from-gnu`), since devopsy-cli's scripts on servers expect them (for example GNU `tail`, `mv -T`).
 - The base step names uutils' for removal (`coreutils-from-uutils-`, `--allow-remove-essential`), since the two conflict over the essential `coreutils` and apt keeps a manual one over a plain install of GNU's.
 - Installs pass `NEEDRESTART_SUSPEND=1`, so Ubuntu's needrestart neither restarts services nor reports into the output.
@@ -46,19 +48,19 @@ devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for [devopsy](https://g
 - kdump is a setting, `DEVOPSY_KDUMP` (`on` by default): crash dumps are a capability the image chose, which setup.sh does not undo unasked.
 - `DEVOPSY_KDUMP=off` takes out `crashkernel=` where `kdump-tools.cfg` adds it and disables kdump-tools' service, which fails without the memory; never purged, since some images depend on it.
 - `kho=off` goes on every server, not only on a kernel with Kexec HandOver on by default: a later kernel with it on has it from its first boot without a rerun, and a kernel without it passes the word to user space, which ignores it.
-- The log says what the kexec step frees and why, with the size it reads (KHO's from the CMA pageblocks in `/proc/pagetypeinfo`, kdump's from `kexec_crash_size`).
-- The kexec step raises the restart flag only when the running kernel holds KHO's scratch or a crash kernel to free, or kdump comes back: a flag for nothing is a banner asking for a reboot that changes nothing, and an automatic reboot taking the sites down for it.
+- The log says what the base step frees for kexec and why, with the size it reads (KHO's from the CMA pageblocks in `/proc/pagetypeinfo`, kdump's from `kexec_crash_size`).
+- The base step raises the restart flag for kexec's memory only when the running kernel holds KHO's scratch or a crash kernel to free, or kdump comes back: a flag for nothing is a banner asking for a reboot that changes nothing, and an automatic reboot taking the sites down for it.
 - unattended-upgrades takes the flag at `DEVOPSY_AUTO_REBOOT_TIME`, even on a day with nothing to upgrade.
 - `update-grub` runs while GRUB's config does not say what the drop-in does yet, never only when the drop-in was written, so a run cut between the two is finished by the next.
 - The docker step raises the socket buffers to 7.5 MB (`/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and `wmem_max`) for a Cloudflare Tunnel's QUIC, which otherwise warns and runs on the kernel's 208 KB maximum.
 - The socket buffers are here, not a setting nor a template's: `net.core` is the host kernel's, not a network namespace's, so no project can set it, and it changes nothing without a tunnel.
 - Sysctl files are written with `write_file` and applied with `sysctl -p` on every run (as the swap step's `vm.swappiness`), never only when written, so a run failing at `sysctl` is finished by the next.
 - `daemon.json` is merged, never written whole (`step_docker`, with `jq`): its four keys (`log-driver`, `log-opts`, `live-restore`, `default-address-pools`) are setup's and replaced, with a warning when they held something else, and every other key stays, since others edit that file too (for example an HTTP proxy's `proxies`).
-- The address pools are a setting, `DEVOPSY_ADDRESS_POOLS`, which the warning names: of setup's four keys only the pools are something to change, so no prompt.
+- The address pools are a setting, `DEVOPSY_ADDRESS_POOLS`, which the warning names, so no prompt: setup.sh often runs without a terminal (`curl | bash`), with nowhere to remember a choice, and the pools are the one key to change.
 - `daemon.json` is compared as JSON (`jq -cS`), so a file saying the same in other words is not rewritten and Docker not restarted.
 - A `daemon.json` that is not a JSON object stops setup.sh, the file as it is.
 - A key setup.sh stops setting is left in `daemon.json`.
-- Docker looks for AppArmor once per daemon, so `apparmor` installed under a running daemon changes nothing until it restarts: `docker_apparmor` restarts Docker when the host has AppArmor and `docker info` lacks `name=apparmor`, once, since the restarted daemon reports it.
+- Docker looks for AppArmor once per daemon, so `apparmor` installed under a running daemon changes nothing until it restarts: `docker_apparmor` restarts Docker when the kernel's `enabled` flag is Y, securityfs has apparmor, `/sbin/apparmor_parser` is there (Docker's own test; without the parser it only warns) and `docker info` lacks `name=apparmor`, once, since the restarted daemon reports it.
 - Running containers keep their profile (none) through that restart (`live-restore`) until they next start.
 - Provider block volumes are mounted by hand before setup, where releases should live (for example `/srv`, a `srv.mount` replacing the provider's unit, with `DEVOPSY_ROOT=/srv`), and Docker waits for the mount (`RequiresMountsFor=/srv` in a `docker.service.d` drop-in): containers starting before it write their bind mounts to the root disk, hidden under the volume.
 - Ubuntu's `sudo` is sudo-rs, which reads `/etc/sudoers.d` too, and its kernel has AppArmor, which Docker applies to containers (`docker-default`).
@@ -102,7 +104,7 @@ test/run.sh
 - What `test/run.sh` checks: Docker, the deploy user and its keys, devopsy, the socket buffers, LLMNR closed, the kernel's arguments for kexec's memory and the restart flag (from kdump's drop-in and an `update-grub` planted in both), a key of another's in `daemon.json` kept, pools changed by hand replaced with a warning, and `DEVOPSY_KDUMP` off then on.
 - A new check goes in `test/run.sh`, and a new supported release is a line of its default list and of `setup.yml`'s matrix.
 - `test/run.sh` cannot show AppArmor (the container shares the host's kernel), swap (`DEVOPSY_SWAP` stays empty, since `swapon` would act on the host), `--help` and saved settings, or the XFS conversion; the socket buffers it sets are the host's.
-- CI runs `lint.yml` (shellcheck and the schema) on every push, and `setup.yml` (`test/run.sh`, one job per release) on a push that changes `setup.sh` or the test, weekly (Docker's repository, the releases' packages and devopsy's installer change without a commit here) and on demand; a newer push to a branch cancels the run before it.
+- CI runs `lint.yml` (shellcheck and the schema) on every push, and `setup.yml` (`test/run.sh`, one job per release) on a push that changes `setup.sh` or the test, weekly (Docker's repository, the releases' packages and defaults and devopsy's installer change without a commit here) and on demand; a newer push to a branch cancels the run before it.
 - What a container cannot show is checked on a real machine, an OrbStack one (`orb create debian:trixie devopsy-test`, `orb create ubuntu:resolute devopsy-test`) or a cloud server: the script with test settings, again without them, `--help`, then the machine deleted (`orb delete -f devopsy-test`).
 - OrbStack machines lack openssh-server and mask systemd-resolved; to reproduce the cloud's port 53 clash, bind a listener to 127.0.0.53:53 before starting acme-dns.
 - Right after a file is edited, OrbStack's file sharing can serve a stale copy to a machine or a `docker run` mount, so a surprising result is run again before it is trusted.

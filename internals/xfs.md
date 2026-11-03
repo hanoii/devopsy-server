@@ -12,7 +12,7 @@
 - Refused, nothing of the conversion is left and the server stays ext4.
 - A new release is tried on a cloud server, then added to both lists, boot 1's and `preflight`'s.
 - The layout decides, never the distribution: boot 1 notes whether `/boot` is its own mount (`MODE` in `/etc/devopsy-xfs.conf`, `boot-in-root` or `boot-separate`).
-- One script converts both layouts (`/usr/local/lib/devopsy-xfs/convert`), run from the initramfs by whichever builds it: initramfs-tools' `local-premount` on Debian, dracut's `pre-mount` on Ubuntu, both through `update-initramfs`.
+- One script converts both layouts (`/usr/local/lib/devopsy-xfs/convert`), run from the initramfs by whichever builds it: initramfs-tools' `local-premount` on Debian, dracut's `pre-mount` on Ubuntu, both through `update-initramfs` (dracut's own on Ubuntu).
 - The script reads `root=` from the kernel's command line itself (`blkid -t`), so it needs none of either initramfs's own functions.
 - Debian 13's initramfs has klibc's tools and no busybox, so the hook copies GNU's and util-linux's into `/devopsy/bin`.
 - dracut sources `pre-mount` hooks into its own shell, so the hook only runs the script.
@@ -34,8 +34,8 @@
 - The XFS takes the root's PARTUUID in the same write as its number, so the kernel's `root=PARTUUID=`, GRUB's config and the root's fstab line keep working, and every `update-grub` after writes the same.
 - Where the kernel finds the root by `root=UUID=`, the ext4's, a drop-in makes it PARTUUID during the conversion (`/etc/default/grub.d/90-devopsy-xfs.cfg`: `GRUB_DISABLE_LINUX_UUID`, `GRUB_DISABLE_LINUX_PARTUUID=false`), since the ext4 keeps that UUID, and the last boot removes it before its `update-grub`.
 - `/boot` is `resize2fs -P`'s minimum in whole GiB, at least 2, with no margin of the conversion's own.
-- Swap files on the root go last, after every check, and the last boot makes them again, their fstab lines kept.
-- The fstab rewrite skips comments, and names the XFS by its own UUID where the root's line named the ext4's.
+- The fstab rewrite names the XFS by its own UUID where the root's line named the ext4's.
+- fstab's `/boot` line names the ext4 by its UUID, `nofail`, so a missing `/boot` boots on.
 
 ## boot-separate (Ubuntu)
 
@@ -48,9 +48,12 @@
 ## Every layout
 
 - Growing is the image's own: growroot grows the ext4 over the disk on boot 1 (phase 1 shrinks it), the conversion's boot reboots before growroot runs, and after it the XFS is the last partition, so growroot, cloud-init's `resizefs` and systemd's growfs (fstab's `x-systemd.growfs`, kept) grow it after a resize or onto a larger server from a snapshot.
-- fstab: the root `xfs defaults` with no `discard` (`fstrim.timer` is on), and `/boot` by its UUID, `nofail`, with an immutable mount point, so a missing `/boot` boots on and an update writing there fails.
+- fstab's root is `xfs defaults` with no `discard`, since `fstrim.timer` is on.
+- The fstab rewrite skips comments.
+- `/boot`'s mount point on the XFS is immutable, so an update writing there without `/boot` mounted fails.
+- Swap files on the root go last, after every check, and the last boot makes them again, their fstab lines kept.
 - `kho=off` is on the conversion's boots, in the same drop-in on every layout: with Kexec HandOver's scratch marked CMA, the copy's kernel memory ran out in the initramfs.
-- apt's timers stay off on the conversion's cloud-init boots (`bootcmd`: the first, `sem/config_write_files` missing, and the last while the finish script is there; started again by it and by a refusal): an unattended upgrade of systemd restarts cloud-init's own service, which then never reaches `power_state`.
+- apt's timers stay off on the conversion's cloud-init boots (`bootcmd`, the first while `sem/config_write_files` is missing and the last while the finish script is there, started again by it and by a refusal), since an unattended upgrade of systemd restarts cloud-init's own service, which then never reaches `power_state`.
 - Stopping the timers in `bootcmd` cancels their jobs, since bootcmd runs before `network-online.target`, which the jobs wait for.
 - The initramfs's `cp -al` and `mv -T --exchange` are GNU's, also where uutils' coreutils are active (`coreutils-from-uutils`), which keep GNU's `cp`, `mv` and `rm`; `ln`, `mkdir` and `dd` may be uutils'.
 - The conversion is tested on a cloud server, the smallest size, deleted afterwards: OrbStack's machines boot no initramfs of their own.
