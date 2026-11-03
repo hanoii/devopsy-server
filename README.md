@@ -59,19 +59,19 @@ On a new server, `cloud-init.yaml` can first convert its root to XFS
 | `DEVOPSY_SWAP`             |         | Swap file size, like `2G` (see ["swap"](docs/without-the-script.md#swap)). |
 | `DEVOPSY_AUTO_REBOOT_TIME` |         | Reboot after upgrades that need it, at this time, like `04:00`. |
 | `DEVOPSY_ADDRESS_POOLS`    | `172.16.0.0/12 192.168.0.0/16` | Ranges Docker cuts into /24 networks, space separated, each /24 or larger. |
-| `DEVOPSY_ROOT`             |         | Where releases live, like `/srv` on a block volume; default the deploy user's home. Written as `releases: root` in the deploy user's `~/.config/devopsy/config.yaml` (devopsy-cli's README, "Release settings"); a file there that devopsy-server did not write is left alone. |
+| `DEVOPSY_ROOT`             |         | Where releases live, like `/srv` on a block volume; default the deploy user's home. Written as `releases: root` in the deploy user's `~/.config/devopsy/config.yaml` (devopsy-cli's [Release settings](https://github.com/hanoii/devopsy-cli/blob/main/docs/config.md#release-settings)); a file there that devopsy-server did not write is left alone. |
 | `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13 or Ubuntu 26.04. Not saved. |
 
 Traefik's settings (ACME email, resolvers, the wildcard domain) are
-devopsy-template-traefik's; see its README.
+devopsy-template-traefik's; see its README and docs.
 
 ## Deploying from CI
 
 Nothing here makes keys. From your machine, `devopsy --ssh-keys-generate`
 makes a pair and `devopsy @<target> --ssh-keys add ~/.ssh/devopsy-ci.pub
 --restricted` authorizes it for the deploy user, without root;
-`--ssh-keys` lists and removes keys (devopsy-cli's README, "Keys on a
-server").
+`--ssh-keys` lists and removes keys (devopsy-cli's [Keys on a
+server](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#keys-on-a-server)).
 
 For CI's known hosts file, run `ssh-keyscan <server>` from your machine
 and check its fingerprints against the server's own:
