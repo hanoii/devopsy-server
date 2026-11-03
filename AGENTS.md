@@ -1,392 +1,139 @@
 # AGENTS.md
 
-devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for devopsy. It
-is a single bash script, `setup.sh`, run as root, often piped from curl,
-and
-`cloud-init.yaml`, user data that converts a new server's root to XFS
-before it (below, "The XFS root"). Read `README.md` for the user-facing
-behavior and keep it in sync: the steps table, the settings table, "An
-XFS root", "Without the script" (each step by hand: a change to a
-`step_*` function changes its commands there) and "Things to know".
+devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for [devopsy](https://github.com/hanoii/devopsy-cli): Docker, the deploy user and devopsy. It is a bash script, `setup.sh`, run as root, often piped from curl, and `cloud-init.yaml`, user data that converts a new server's root to XFS before it.
+
+## Workflow
+
+### Git
+
+- Conventional commits; the subject about 50 characters, 72 at most, the reason in the body: release notes are commit subjects, and tools cut longer ones.
+- A commit made with an AI agent ends with one line naming it, `Assisted-by: <agent>:<model> [<effort>]` (for example `Assisted-by: claude-code:claude-opus-5-5 high`), never `Co-Authored-By`: GitHub shows a co-author as a person.
+- Any word with an `@` in a commit message or a doc goes in backticks (for example `@prod`, `deploy@host`): GitHub links a bare `@name` to that user.
+- Push and tag only when asked: a push publishes, a tag releases.
+- A change of one commit (for example a quick fix) goes straight onto `main`, in the main checkout.
+- Any larger task gets one branch, `<type>/<slug>`, its type what it brings to `main` whatever its commits' types (for example `feat/snapshots`, `docs/readme`).
+- All of a task's work goes on its branch, reviews' failing tests and their fixes included; never a branch off a task's branch.
+- A finished branch is rebased onto `main`, merged with `--no-ff` and deleted.
+- A partial merge, only when asked, is rebased and merged the same way and keeps the branch and its worktree, rebased at once onto the merge for the rest of the task.
+- A branch is worked in a worktree of its own, `.worktrees/<slug>` (`git worktree add .worktrees/<slug> -b <type>/<slug>`), removed once merged: inside the repository, a worktree is within the directories the agent may use.
+- The main checkout stays on `main`.
+- A worktree of a devopsy project run beside its main checkout gets its own `project:` (for example `whoami-<slug>`) in `.devopsy/config.local.yaml`: otherwise both are one local compose project, sharing containers and volumes.
+- `.worktrees/` is listed in `.gitignore` and in the ignore file of any Docker build context that holds it: a `docker build` would otherwise send every worktree in its context.
+- A session in a worktree starts by rebasing it onto `main`: the work adapts to what changed while it is still cheap.
+
+### Tests and checks
+
+- Every change carries its test, a fix's failing without it, a feature's checking what it promises, and a behavior a change touches with no test gets one then: a test is what keeps a fix fixed.
+- A fix's test is run against the code before the fix, and the summary says it failed there.
+- Unit tests first; an end-to-end test only for what needs a real system (for example Docker, sshd, the network, a terminal or timing).
+- One test per behavior: extend the test that covers it before adding another, and never test one thing at both levels.
+- The suites stay fast, locally and in CI, since every change waits on them: a new test runs in parallel with the others where it can, polls rather than sleeps, and reuses the setups that exist.
+- A test made faster checks the same things, never fewer: a speed-up that drops a case or an assertion is a regression.
+- A check or a refusal is only for a mistake any release can make, a setting a tool would otherwise take without a word; none is added for one upgrade only (for example a refusal of an old name after a rename): an upgrade's own steps cover those, and old names left over are ignored.
+- Until 1.0.0, no tests of specific older versions and no handling of mixed versions (for example an operator and a server on different devopsy): a new behavior an older server lacks refuses before anything changes, and that is all.
+
+### Refactors
+
+- Before writing code for one case, look for the same pattern elsewhere (for example a message, a check, an interrupt) and propose one helper for all, each site adding only what is its own: variants drift apart, and a fix then lands in one of them only.
+- A design that makes a change awkward is proposed for change, never worked around: workarounds pile up where the design is wrong.
+- When a change makes the code simpler (less code, fewer external calls), the tests' fakes are extended to match, never the heavier code kept or a test weakened to pass.
+- A refactor reaching beyond the task is agreed before it is made.
+
+### Reviews
+
+- A review round is two independent reviewers, one on Opus and one on Fable, on the task's branch in its worktree.
+- A review brief lists what earlier rounds found and states Tests and checks' two limits, mixed versions and lean checks: findings of those kinds are not fixed.
+- A review brief also asks for the same pattern written twice and for workarounds of the design (Refactors).
+- A reviewer writes what it tests into the repository as `test:` commits on the task's branch, a failing test that proves a bug kept with a comment naming it, never product code: a harness outside the repository is lost with its round.
+- While building or after a review, a bug, an edge case, a name or a verified finding is decided and fixed without asking, a fix with its failing test first, and said in the summary; only what changes the agreed design or user-facing behavior is asked.
+- At most two rounds per branch: after the second round's fixes, the tests, the end-to-end suite and a hand test cover the rest.
+
+### Servers and names
+
+- Never touch a real server without asking, even read-only; test on throwaway machines and delete them afterwards: a read can still load a server, and only its owner knows what runs there.
+- Names in examples, tests, docs and commit messages are generic (for example `app`, `shop`, `vm1`, `example.com`), never a real project, client, server, domain or person, nor anything from an agent's memory or another project: a public history keeps whatever a commit once said.
+
+### Docs
+
+- The root holds what every task in the repository needs; a part only some tasks need is an area, `internals/<area>.md`, with one line in the root's index saying what it covers and when to read it: the root loads with every session, the areas only when their line says so.
+- A root is kept under about 250 lines, a guide, never a cap: past it, what only some tasks need moves to an area, and no needed rule is cut or squeezed to fit.
+- A rule's history goes in `internals/<area>.history.md`, or `internals/<section>.history.md` for a rule in a section of the root, starting with a line saying it is history, not rules, and its area's file wins where they differ.
+- A history file is read only before changing or questioning one of its rules, when a review finding looks like it contradicts a decision, or when asked why.
+- How a script or a function works, step by step, goes in its comments, never in an AGENTS.md or area: a comment changes with its code.
+- A commit's reason goes in its body; only a decision a later session must respect becomes a rule, in its area or the root, its story in the history, in the same commit: anywhere else, the next session rediscovers it or contradicts it.
+- Before adding a rule, find any line it repeats or contradicts, in its file and the root, and change that line instead: two lines on one thing drift apart.
+- A line written or changed in an AGENTS.md or area is checked before its commit (for example `Push and tag only when asked: a push publishes, a tag releases.`):
+  - one rule, imperative, no bold, no prose around it;
+  - a why only when something real breaks without it, saying what breaks, never an invented one, which an agent takes for a reason;
+  - examples written "(for example ...)" before the colon, and one colon at most outside code;
+  - one reading only, else reworded, never explained further;
+  - no story (review rounds, what broke, measurements), which goes in the history.
+- A README says at a glance what the repository is and how to start; anything longer is a doc of its own in `docs/` that it links to: a README that piles up docs gets skimmed past.
+- READMEs and docs are written plainly, with no selling words, no bold lead-in on every bullet, no closing summary, no emoji and no "Note" asides: they read as generated and bury the facts.
+- Each fact has one home, and other docs link to it rather than repeat it: two copies drift apart.
+
+## Layout
+
+- `setup.sh`: the settings (`load_settings`, `validate_settings`, `save_settings`, `usage`), `preflight`, then one `step_*` function per step, run in order by `main`.
+- `cloud-init.yaml`: the XFS conversion, its scripts in `write_files` (`internals/xfs.md`).
+- `test/run.sh` and `test/Dockerfile` run `setup.sh` in containers (Checks).
+- `.github/workflows/` holds `lint.yml` and `setup.yml`.
+- `README.md` and `docs/` are the user-facing behavior, kept in step with every change: the README's steps and settings tables, `docs/xfs.md`, `docs/without-the-script.md` (each step by hand, so a change to a `step_*` function changes its commands there) and `docs/things-to-know.md`.
 
 ## Rules
 
-- **Every step is idempotent:** running the script twice in a row
-  changes nothing the second time and restarts nothing. Where: each
-  `step_*` function.
-- **Config files are written with `write_file`,** which only writes, and
-  returns success, when the content changed. Why: a service restarts
-  only then.
-- **A choice is a `DEVOPSY_*` setting with a default in
-  `load_settings`,** added to `SETTINGS` (so it is saved), to `usage`
-  and to the README table. `usage` runs before `preflight`, so `--help`
-  works anywhere, as any user, and shows the saved settings when it can
-  read them.
-- **Settings are validated, then saved, before any step runs**
-  (`validate_settings`, `save_settings`). Why: a failed run remembers
-  them, and a typo never sticks.
-- **Never change the SSH server configuration.** Why: providers set it
-  up, and a mistake there locks the operator out.
-- **No host firewall:** the provider's firewall covers it (README.md).
-- **Debian 13 and Ubuntu 26.04, nothing else,** with apt and systemd
-  directly and no configuration management dependencies. Each is
-  tested before it is listed (`preflight`; `DEVOPSY_FORCE=1` for any
-  other). What differs is small: Docker's repository is
-  `download.docker.com/linux/$ID`, and on Ubuntu `coreutils-from-gnu`
-  keeps GNU's coreutils the active ones, which devopsy-cli's scripts on
-  servers expect (GNU `tail`, `mv -T`): Ubuntu ships Rust's uutils
-  beside them and may make them the default (26.04 on DigitalOcean had
-  GNU's, checked 2026-10-26; OrbStack's 26.04 and a server upgraded
-  from 24.04 have `coreutils-from-uutils` marked manual, checked
-  2026-10-27). The two conflict over the essential `coreutils`, so the
-  base step names the other one for removal (`coreutils-from-uutils-`,
-  `--allow-remove-essential`): a plain install of GNU's failed there,
-  apt keeping the manual one. `NEEDRESTART_SUSPEND=1` on installs keeps
-  Ubuntu's needrestart from restarting services and reporting into the
-  output. Ubuntu's `sudo` is sudo-rs, which reads `/etc/sudoers.d` too;
-  its kernel has AppArmor, applied to containers (`docker-default`).
-- **Never create or print secrets.** Keys for the deploy user are
-  devopsy-cli's (`--ssh-keys`), made on the operator's machine.
-- **A bootstrap of the host only.** Per-project deployment belongs in
-  projects' `.devopsy/`, and Traefik is released like any project
-  (devopsy-template-traefik): nothing here knows about Traefik. The
-  only setting devopsy-cli reads that this writes is the release root
-  (`DEVOPSY_ROOT`, as `releases: root` in the deploy user's devopsy
-  config, in a file marked as written here). Why: a server needs
-  Docker, the deploy user and devopsy, and this script is one way to
-  get them.
-- **A setup script, not a CLI:** it takes no arguments but `--help`,
-  runs every step every time, and leaves no command on the server: no
-  step names, no subcommands, no installed copy that updates itself
-  (all three existed and were removed, with the `ci-key` step). What a
-  server needs after setup is `devopsy` and plain SSH.
-- **A rerun upgrades what the script installed, nothing else:** the apt
-  packages it names (`apt-get install` upgrades an installed one),
-  Docker among them, and devopsy (`devopsy --upgrade` as the deploy
-  user; a failure only warns). No `dist-upgrade`.
+- Every step is idempotent: a second run in a row changes nothing and restarts nothing.
+- Config files are written with `write_file`, which writes, and returns success, only when the content changed, so a service restarts only then.
+- A choice is a `DEVOPSY_*` setting with a default in `load_settings`, listed in `SETTINGS` (so it is saved), in `usage` and in the README's table.
+- `usage` runs before `preflight`, so `--help` works anywhere, as any user, and shows the saved settings when it can read them.
+- Settings are validated, then saved, before any step runs (`validate_settings`, `save_settings`): a failed run remembers them, and a typo never sticks.
+- A setting applies its state on every run, both ways (for example `DEVOPSY_KDUMP=on` puts back what `off` took away).
+- Never change the SSH server's configuration: providers set it up, and a mistake there locks the operator out.
+- No host firewall: the provider's covers it (README.md).
+- Debian 13 and Ubuntu 26.04 only, through apt and systemd directly, with no configuration management: each release is tested before `preflight` lists it, and `DEVOPSY_FORCE=1` runs on any other.
+- Docker's apt repository is per distribution, `download.docker.com/linux/$ID`.
+- On Ubuntu GNU's coreutils stay the active ones (`coreutils-from-gnu`), since devopsy-cli's scripts on servers expect them (for example GNU `tail`, `mv -T`).
+- The base step names uutils' for removal (`coreutils-from-uutils-`, `--allow-remove-essential`), since the two conflict over the essential `coreutils` and apt keeps a manual one over a plain install of GNU's.
+- Installs pass `NEEDRESTART_SUSPEND=1`, so Ubuntu's needrestart neither restarts services nor reports into the output.
+- Never create or print secrets: the deploy user's keys are devopsy-cli's (`--ssh-keys`), made on the operator's machine.
+- Setup is a bootstrap of the host only: per-project deployment belongs in projects' `.devopsy/`, and Traefik is released like any project, so nothing here knows of Traefik.
+- The only setting of devopsy's this writes is the release root (`DEVOPSY_ROOT`, as `releases: root` in the deploy user's devopsy config, in a file marked as written here).
+- A setup script, never a CLI: no arguments but `--help`, every step on every run, and no command left on the server (no step names, no subcommands, no installed copy that updates itself).
+- What a server needs after setup is devopsy and plain SSH.
+- A rerun upgrades what the script installed and nothing else: the apt packages it names (an `apt-get install` upgrades an installed one), Docker among them, and devopsy (`devopsy --upgrade` as the deploy user, a failure only warning); never a `dist-upgrade`.
+- setup.sh never reboots, since a rerun on a live server would take its sites down; what needs a reboot raises the restart flag a kernel update does (`/run/reboot-required`, `devopsy-server` in its `.pkgs`), only when the reboot changes something.
 
-## Decisions and gotchas
+## Steps
 
-- **devopsy belongs to the deploy user, in `/usr/local/lib/devopsy`**
-  (`step_cli`), so `devopsy --upgrade` needs no root: it resolves the
-  `/usr/local/bin/devopsy` link and replaces the file in its own
-  directory. Not in the user's home: homes are mode 700 or 750 on some
-  distributions, and the link would then only work for its owner.
-  `/usr/local/bin` itself stays root's, and SSH sessions without a
-  login shell have it in `PATH`, unlike `~/.local/bin`. The installer
-  runs as the deploy user, so root never runs what it downloads.
-- **No version setting:** a rerun runs `devopsy --upgrade` as that user,
-  the one way to upgrade, so a pinned version would last only until the
-  next rerun.
-- **devopsy-cli's end-to-end servers copy this host setup**
-  (`e2e/Dockerfile`, `e2e/daemon.json` there: Docker with Buildx, the
-  /24 address pools): a change to the `docker` step's packages or
-  `daemon.json` goes there too. Except `apparmor`, never mirrored: those
-  servers are privileged Docker-in-Docker, and on a host with AppArmor
-  (GitHub's Ubuntu runners included) it would start confining the inner
-  containers, changing what the suite tests. Nor the socket buffers
-  (below): `net.core` is the host's, which a container cannot set.
-- **The `base` step turns off systemd-resolved's LLMNR and multicast
-  DNS** (`/etc/systemd/resolved.conf.d/90-devopsy.conf`): Debian 13's
-  resolved answers LLMNR on port 5355 of every address, the one host
-  service but SSH listening publicly (found on a DigitalOcean server,
-  2026-10-29), and a server never resolves names on its local network.
-  Ubuntu 26.04's has LLMNR off already (`resolvectl status`: `-LLMNR`);
-  set on both, should a default change. Not a setting, as the socket buffers below. Written where
-  resolved is missing or masked (OrbStack) too, for when it comes;
-  resolved restarts when the file was written, or while 5355 is still
-  open (a first run cut after writing), so a rerun restarts nothing.
-  `test/run.sh` checks it (below).
-- **The `base` step frees the memory the kernel keeps for kexec**
-  (`/etc/default/grub.d/zz-devopsy.cfg`, after the image's drop-ins):
-  `kho=off` on every server, and with `DEVOPSY_KDUMP=off`
-  `crashkernel=` taken out where `kdump-tools.cfg` adds it, kdump-tools'
-  service disabled (it fails without the memory); `on`, the default,
-  puts both back, as settings apply their state on every run. kdump is a
-  setting and KHO not (decided with the user, 2026-10-29): `kho=off`
-  takes nothing away, while kdump is a capability the image chose, crash
-  dumps, which setup.sh should not undo unasked. The log says what is
-  freed and why, with the size it reads (KHO's: the CMA pageblocks in
-  `/proc/pagetypeinfo`, kdump's: `kexec_crash_size`). Ubuntu 26.04's
-  kernel (7.0) turns
-  Kexec HandOver on and marks its scratch memory CMA, for movable pages
-  only, so page tables, slab and socket buffers share the rest: 646 MB
-  of 2 GB on DigitalOcean, 1.25 GB on Vultr, where its image also
-  reserves 320 MB for kdump (checked 2026-10-29; DigitalOcean's has no
-  kdump). Nothing on a devopsy server kexecs, so KHO is no setting, as
-  the socket buffers below. On every server, not only where a kernel has
-  `CONFIG_KEXEC_HANDOVER_ENABLE_DEFAULT=y` (decided with the user): a
-  later kernel with it on, a Debian release upgrade, has it from its
-  first boot without a rerun, and Debian 13's 6.12, without KHO, passes
-  the word to user space ("Unknown kernel command line parameters"),
-  which ignores it (checked on Vultr). kdump-tools is disabled, never
-  purged: Vultr's `ubuntu-server-minimal` depends on it. Applied by the next
-  reboot: setup.sh never reboots (a rerun on a live server would take
-  its sites down), and raises the restart flag a kernel update does
-  (`/run/reboot-required`, `devopsy-server` in its `.pkgs`) only when
-  the reboot changes something: the running kernel holds KHO's scratch
-  or a crash kernel to free, or kdump comes back (a flag for nothing,
-  as on Debian 13's 6.12, would be a banner asking for a reboot that
-  changes nothing, and an automatic one taking the sites down for it;
-  the user, 2026-10-29). unattended-upgrades
-  takes it at `DEVOPSY_AUTO_REBOOT_TIME` even on a day
-  with nothing to upgrade (its 2.12's `reboot_if_requested_and_needed`,
-  after every run that writes its stamp). `update-grub` runs while
-  GRUB's config does not say so yet, never only when the drop-in was
-  written, so a run cut between the two is finished by the next.
-  Checked on Vultr's Ubuntu: no CMA block and 320 MB more after the
-  reboot, the system `running`. The XFS conversion turns KHO off for its own boots
-  too (above, "The XFS root").
-- **The `docker` step raises the socket buffers to 7.5 MB**
-  (`/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and
-  `wmem_max`), for QUIC: a Cloudflare Tunnel's connector (`cloudflared`,
-  quic-go) asks for that and otherwise warns and runs with the kernel's
-  default maximum, 208 KB. Why here and not a setting: `net.core` is the
-  host kernel's, not a network namespace's, so it is what every container
-  gets from the host, like `daemon.json` and AppArmor; it changes nothing
-  without a tunnel, and a setting nobody would turn off is noise. Why not
-  the Traefik or the tunnel template: a project cannot set a host sysctl
-  (compose's `sysctls:` are the container's namespace, and `net.core` is
-  not among them). Written with `write_file` and applied with `sysctl -p`
-  on every run, as the swap step's `vm.swappiness`. Before, both applied
-  it only when written, so a first run failing at `sysctl` left the file
-  and every rerun skipped it.
-- **`daemon.json` is merged, never written whole** (`step_docker`,
-  with `jq`): its four keys (`log-driver`, `log-opts`, `live-restore`,
-  `default-address-pools`) are setup's and replaced, with a warning when
-  they held something else (the pools' names `DEVOPSY_ADDRESS_POOLS`),
-  and every other key stays. Why: it is the one file setup writes that
-  others edit too; written whole, a rerun dropped a proxy's `proxies`
-  (found on a server behind an HTTP proxy, 2026-10-27), and Docker then
-  pulled nothing. Decided with the user over a prompt with a diff, as
-  dpkg asks for a conffile: setup.sh runs every step on every run, often
-  without a terminal (`curl | bash`), with nowhere to remember a "keep
-  mine", and of the four keys only the pools are something to change,
-  which is the setting's job. Compared as JSON (`jq -cS`), so a file
-  saying the same in other words (the heredoc of before) is not
-  rewritten and Docker not restarted. Not a JSON object: setup.sh stops,
-  the file as it is. A key setup.sh stops setting is left there (lean
-  checks).
-- **Docker looks for AppArmor once per daemon** (containerd's
-  `HostSupports`, behind a `sync.Once`: securityfs, the kernel's
-  `enabled` flag, `/sbin/apparmor_parser`), so installing `apparmor`
-  under a running daemon changes nothing until it restarts, and a rerun
-  restarts Docker only when `daemon.json` changes. `docker_apparmor`
-  restarts it when the host passes those checks and `docker info` lacks
-  `name=apparmor`: once, since the restarted daemon reports it. Running
-  containers keep their profile (none) through the restart
-  (`live-restore`) until they next start. Not testable on OrbStack,
-  whose kernel has no AppArmor: there the step only says so.
-- **Provider block volumes are mounted by hand, before setup:**
-  DigitalOcean mounts an attached volume on `/mnt/<volume>` with its
-  own systemd mount unit. Mount it where releases should live, like
-  `/srv` (`srv.mount`, after removing the provider's unit), with
-  `DEVOPSY_ROOT=/srv`, and make Docker wait for it
-  (`RequiresMountsFor=/srv` in a `docker.service.d` drop-in). Why:
-  containers starting before the mount write their bind mounts to the
-  root disk, hidden under the volume. `setup.sh` does not do this.
-- **OrbStack machines differ from cloud servers:** they lack
-  openssh-server and mask systemd-resolved. To reproduce the cloud
-  port 53 clash, bind a listener to 127.0.0.53:53 (a few lines of
-  python) before starting acme-dns. Right after editing a file,
-  OrbStack's file sharing can serve a stale copy to a machine or a
-  `docker run` mount: rerun before trusting a surprising result.
-  Reaching a machine's IP or `<machine>.orb.local` from macOS makes
-  OrbStack ask for admin rights (its network helper): go through `ssh
-  <user>@<machine>@orb` instead, and test public DNS and certificates
-  on a real server.
-
-## The XFS root
-
-`cloud-init.yaml` converts the image's ext4 root to XFS on a new
-server's first boots: the XFS as partition 1 over the rest of the disk,
-GRUB reading only ext4, and nothing of the conversion left behind. Why
-XFS: reflinks, so a copy of an environment's data takes seconds whatever
-its size; Debian's and Ubuntu's kernels have it, it suits databases,
-and it grows online (never shrinks). Its comments say how each boot
-goes; here are the decisions and the findings.
-
-- **User data, not a step of `setup.sh`** (decided): the conversion
-  needs the disk before anything is on it, and two reboots. `setup.sh`
-  stays host setup, run after it as on any server, and knows nothing of
-  it.
-- **The whole root, not a data partition beside an ext4 root**
-  (decided 2026-10-26, after building and testing the split): a split
-  fixes the root's size forever, while a bigger plan on DigitalOcean
-  is a bigger disk, so the root could never grow with the server, and
-  with Docker's images on the data side too it would hold only the
-  system. One filesystem has no size to choose, no mounts to order and
-  nothing to fail when a partition is missing. What the conversion
-  risks is a new, empty server's: one that fails is created again.
-- **Boot 1 refuses what was not tried** (decided 2026-10-26, the user
-  asked how the layout check holds up when an image changes): a release
-  other than Debian 13 or Ubuntu 26.04 (as `setup.sh`'s `preflight`;
-  point releases keep `VERSION_ID`), a kernel `root=` other than
-  `UUID=`, `PARTUUID=` or a device (the XFS takes those over, a
-  `LABEL=` would find nothing after the conversion: the convert script
-  refuses it too), and an initramfs without the conversion or XFS's
-  driver once built (`lsinitrd`, else `lsinitramfs`): one from another
-  generator would never convert, and the log would wait for it on every
-  boot. Refused, nothing of the conversion is left and the server stays
-  ext4. A new release is tried on DigitalOcean, then added to both
-  lists.
-- **By layout, not by distribution:** boot 1 notes whether `/boot` is
-  its own mount (`MODE`, `/etc/devopsy-xfs.conf`): DigitalOcean's
-  Debian 13 has `/boot` in the root (`boot-in-root`), its Ubuntu 26.04
-  on a partition of its own (`boot-separate`); Vultr's both in the
-  root. One script converts both
-  (`/usr/local/lib/devopsy-xfs/convert`), run from the initramfs by
-  whichever builds it: initramfs-tools' `local-premount` on Debian,
-  dracut's `pre-mount` on Ubuntu, both through `update-initramfs`
-  (dracut's own on Ubuntu). The rest of this section is the
-  `boot-in-root` layout's unless it says Ubuntu.
-- **`/boot` stays the image's ext4, kept in place:** GRUB never reads
-  XFS (its BIOS core carries only the modules for `/boot`'s filesystem,
-  and `mkfs.xfs`'s defaults, like `nrext64`, may be newer than a
-  GRUB), and the ext4 keeps its UUID, which GRUB's EFI config and the
-  boot-1 core search by. Its files move to its top, with `boot -> .`,
-  so `/boot/grub` and `/grub` are one directory: the image's GRUB
-  looks for the first, `grub-install` from the converted server writes
-  the second.
-- **DigitalOcean wants the root as partition 1:** creating a Droplet
-  from a snapshot of a server whose root was partition 2 failed, the
-  Droplet gone during creation (`doctl`'s 404, nothing in the panel),
-  live or powered off, at any size; a snapshot of a stock server
-  worked, and one with the root renumbered to 1 did (found 2026-10-26).
-  Its own XFS image (Rocky Linux) has the root as partition 1 too. GPT
-  numbers are independent of where a partition lies, so the XFS takes
-  number 1 at the end of the disk, and the ext4 another.
-- **GRUB's BIOS core finds `/boot` by partition number** (`(,gpt1)`, as
-  `grub-install` writes it): renumbering without reinstalling GRUB left
-  a server that never booted (found 2026-10-26). `grub-install` cannot
-  run in the initramfs, and run before the renumbering it writes the
-  old number. So boot 1 installs a core of its own (`grub-mkimage`
-  with a `search.fs_uuid` config, `grub-bios-setup`), valid before and
-  after, and the last boot reinstalls GRUB as its updates do
-  (`dpkg-reconfigure grub-cloud-amd64`: by number again, the new one).
-  The EFI config was by UUID already.
-- **The XFS takes the root's PARTUUID** in the same write as its
-  number: the kernel's `root=PARTUUID=` (the image's
-  `grub.d/10_cloud.cfg`), GRUB's config and the root's fstab line keep
-  working unchanged, and every `update-grub` after writes the same.
-- **State is the XFS partition's GPT name:** `devopsy-new` (copy),
-  `devopsy-copied` (strip the ext4), `devopsy-stripped` (renumber),
-  `devopsy-root` (done, nothing ever again), the ext4 `devopsy-boot`.
-  The ext4 stays the root until the renumbering, so a failure up to the
-  copy boots on as before; from the strip on the ext4 boots no system,
-  and the next boot resumes in the initramfs before it needs one.
-- **The strip never leaves GRUB without `/boot/grub`:** `/boot`'s files
-  are hard-linked to the top (`cp -al`), then one rename swaps the
-  directory for the link (`mv -T --exchange`, renameat2's
-  `RENAME_EXCHANGE`, coreutils 9.5). Without `-T`, `mv --exchange`
-  moves the link into the directory (found).
-- **The last boot's script waits for `devopsy-root`,** not for an XFS
-  root: an earlier version ran on an XFS root with its last phase left
-  (found).
-- **Debian 13's initramfs has klibc's tools, no busybox:** the hook
-  copies GNU's and util-linux's into `/devopsy/bin`. The script reads
-  `root=` from the kernel's command line itself (`blkid -t`), so it
-  needs nothing of either initramfs's own functions.
-- **On Ubuntu GRUB is untouched:** `/boot` is its own ext4 (`vda13`),
-  so the root is only the kernel's (`root=UUID=`, the filesystem's).
-  The XFS takes the root's partition number, PARTUUID and filesystem
-  UUID (`xfs_db -x -c "uuid ..."`), and the ext4 goes, its signature
-  wiped first (`wipefs`): a stale ext4 with the root's UUID would
-  shadow the root if a partition were ever made over it. Each step
-  leaves the root resolving to a complete copy.
-- **On Ubuntu no space is lost:** the ext4 is shrunk to its minimum
-  (3.4 GiB for 2.5 used: its inode tables), copied whole to the end of
-  the disk (`dd`, `devopsy-moving`), and one write moves its partition
-  there and gives the space before it to the XFS (`devopsy-old`), which
-  grows over the ext4's once it goes (`x-systemd.growfs`). Without the
-  move the shrunk ext4's space stayed unused before the root (tried:
-  XFS grows only at its end). Until that write the partition is the
-  copy's source, untouched, so a cut copies again.
-- **dracut runs `pre-mount` hooks sourced into its own shell:** the
-  hook only runs the script. Ubuntu builds host-only, which left out
-  XFS's driver even with `instmods`, in `install()` or
-  `installkernel()` (found: `mount: unknown filesystem type 'xfs'`,
-  the server booting on ext4 and retrying); `add_drivers+=" xfs "` in
-  `/etc/dracut.conf.d` puts it in. The script also `modprobe`s it.
-- **Growing is the image's own:** growroot grows the ext4 over the
-  disk on boot 1 (phase 1 shrinks it), and the conversion's boot
-  reboots before growroot runs. After it the XFS is the last partition,
-  so growroot, cloud-init's `resizefs` and systemd's growfs (fstab's
-  `x-systemd.growfs`, kept) grow it after a resize or onto a larger
-  Droplet from a snapshot.
-- **fstab:** the root `xfs defaults` (no `discard`: `fstrim.timer` is
-  on), `/boot` by its UUID, `nofail` with an immutable mount point, so
-  a missing `/boot` boots on and an update writing there fails.
-- **Measured** (2026-10-26, `s-1vcpu-512mb`, ext4 `/boot` against the
-  XFS root, the same disk): unpacking 34,000 files (754 MB) 6.3 to 7.0
-  s against 7.1 to 7.8, deleting them 1.0 s against 2.5, random 16k
-  writes 19.7k against 23.8k IOPS; a reflink copy of a 650 MB database
-  0.03 s. Swap on a `fallocate`d file works (`setup.sh`'s swap step).
-- **Vultr's images differ** (2026-10-29, `vhp-2c-2gb-amd`, 60 GB):
-  EFI only (no BIOS boot partition, `grub-efi-amd64` alone), `/boot` in
-  the root on both releases, the kernel's `root=UUID=` the ext4's
-  filesystem UUID, a `/swapfile` from Vultr's vendor data (100 MB per
-  GB of root, once per instance) and roots larger than 2 GiB. So boot
-  1 installs the BIOS core only where `/boot/grub/i386-pc` is (the EFI
-  config finds `/boot` by the filesystem UUID, which the ext4 keeps);
-  the kernel finds the root by PARTUUID through a drop-in
-  (`/etc/default/grub.d/90-devopsy-xfs.cfg`: `GRUB_DISABLE_LINUX_UUID`,
-  `GRUB_DISABLE_LINUX_PARTUUID=false`), since the ext4 keeps the UUID
-  it was found by, and the last boot removes it before its
-  `update-grub` (back to `root=UUID=`, the XFS's); swap files on the
-  root go last, after every check, and the last boot makes them again,
-  their fstab lines kept. `/boot` is `resize2fs -P`'s minimum in whole
-  GiB, at least 2: 5 and 6 GiB there, no margin of our own (a half GiB
-  made DigitalOcean's 3). The fstab rewrite skips comments (Debian's
-  installer leaves `# / was on /dev/vda2 during installation`, which
-  the awk took for the root's line) and names the XFS by its own UUID
-  where the root's line named the ext4's.
-- **`kho=off` on the conversion's boots:** Ubuntu 26.04's kernel (7.0)
-  has Kexec HandOver on by default (`CONFIG_KEXEC_HANDOVER_ENABLE_DEFAULT`),
-  and marks its scratch memory CMA, for movable pages only: 626
-  pageblocks, 1.25 of 2 GiB on Vultr (`/proc/pagetypeinfo`; `CmaTotal`
-  0, `CmaFree` 830 MB once booted). In the initramfs the copy's kernel
-  memory (slab, some 400 MB left) ran out: the OOM killer took `cp` and
-  the hook, and once the kernel panicked "deadlocked on memory" and
-  stayed there. With `kho=off` no CMA block is left (checked). The same
-  drop-in carries it on every layout; Debian's 6.12 has no KHO and
-  passes the argument to init, which ignores it. DigitalOcean's 512 MB
-  Ubuntu converted without it (not looked into why).
-- **apt's timers stay off on the conversion's cloud-init boots**
-  (`bootcmd`: the first, `sem/config_write_files` missing, and the last
-  while the finish script is there; started again by it and by a
-  refusal): on Vultr's Ubuntu, unattended-upgrades
-  (`apt-daily-upgrade.service`, some 10 s into cloud-init's final
-  stage) upgraded systemd, which re-executed and restarted services,
-  `cloud-init-main.service` among them, so cloud-init died in runcmd
-  and never reached `power_state`. bootcmd runs before
-  `network-online.target`, which their jobs wait for, so stopping them
-  cancels the jobs.
-- **Vultr's Ubuntu runs uutils' coreutils** (`coreutils-from-uutils`)
-  but keeps GNU's `cp`, `mv` and `rm` (`gnucp`...), so the
-  initramfs's `cp -al` and `mv -T --exchange` are GNU's; `ln`, `mkdir`
-  and `dd` are uutils' (`dd` only on the `boot-separate` path).
-- **Tested on Vultr** (2026-10-29): Debian 13 and Ubuntu 26.04, the
-  conversion at 60 GB (each from the final file in one go, about two
-  minutes), a reboot after it, `setup.sh` and `--server-info`
-  (reflinks); no updates, release or provider snapshot.
-- **Tested on DigitalOcean** (2026-10-26; the conversion again on both
-  with Vultr's changes, 2026-10-29). Ubuntu 26.04 (kernel
-  7.0, GRUB 2.14, dracut 110): the conversion at 10 GB (8.9 GiB XFS,
-  nothing unused), and resumed after a failure past phase 1 (the
-  missing XFS driver); a kernel upgrade, GRUB's packages reinstalled
-  (`grub-install` for BIOS and EFI) and a kernel removed, each with
-  reboots; `setup.sh`; a release like Debian's, its reflink snapshot
-  and restore; a live snapshot onto a new 25 GB Droplet, a rebuild from
-  it and a disk resize. No release upgrade (26.04 is offered none yet). Debian 13: the
-  conversion at 10 and 25 GB; reboots; a kernel upgrade, GRUB's
-  packages reinstalled, a kernel removed and an upgrade to forky
-  (Debian 14: kernel 7.2, GRUB 2.14), each with reboots; `setup.sh`, a
-  release with a database in a named volume and an owned `mnt` entry,
-  reflink copies of both; a live snapshot onto a new 25 GB Droplet
-  (grown, the services and data back) and a rebuild from it; a disk
-  resize. Not testable on OrbStack: its machines boot no initramfs of
-  their own.
+- devopsy belongs to the deploy user, in `/usr/local/lib/devopsy` (`step_cli`), so `devopsy --upgrade` needs no root: it resolves the `/usr/local/bin/devopsy` link and replaces the file in its own directory.
+- devopsy is never in the deploy user's home: homes are mode 700 or 750 on some distributions, and the link would then work only for its owner.
+- `/usr/local/bin` stays root's, and SSH sessions without a login shell have it in `PATH`, unlike `~/.local/bin`.
+- The installer runs as the deploy user, so root never runs what it downloads.
+- No version setting: a rerun runs `devopsy --upgrade`, so a pinned version would last only until the next rerun.
+- devopsy-cli's end-to-end servers copy this host setup (`e2e/Dockerfile` and `e2e/daemon.json` there: Docker with Buildx, the /24 address pools), so a change to the docker step's packages or `daemon.json` goes there too.
+- Never mirrored there: `apparmor`, which on a host with AppArmor would start confining the privileged Docker-in-Docker servers' inner containers, and the socket buffers, the host's.
+- The base step turns off systemd-resolved's LLMNR and multicast DNS (`/etc/systemd/resolved.conf.d/90-devopsy.conf`) on both releases, not as a setting: a server never resolves names on its local network, and Debian 13's resolved answers LLMNR on port 5355 of every address.
+- The resolved drop-in is written where resolved is missing or masked too, for when it comes, and resolved restarts when the file was written or while 5355 is still open, so a run cut after writing is finished by the next.
+- The base step frees the memory the kernel keeps for kexec (`/etc/default/grub.d/zz-devopsy.cfg`, after the image's drop-ins): `kho=off` on every server, as no setting since nothing on a devopsy server kexecs.
+- kdump is a setting, `DEVOPSY_KDUMP` (`on` by default): crash dumps are a capability the image chose, which setup.sh does not undo unasked.
+- `DEVOPSY_KDUMP=off` takes out `crashkernel=` where `kdump-tools.cfg` adds it and disables kdump-tools' service, which fails without the memory; never purged, since some images depend on it.
+- `kho=off` goes on every server, not only on a kernel with Kexec HandOver on by default: a later kernel with it on has it from its first boot without a rerun, and a kernel without it passes the word to user space, which ignores it.
+- The log says what the base step frees for kexec and why, with the size it reads (KHO's from the CMA pageblocks in `/proc/pagetypeinfo`, kdump's from `kexec_crash_size`).
+- The base step raises the restart flag for kexec's memory only when the running kernel holds KHO's scratch or a crash kernel to free, or kdump comes back: a flag for nothing is a banner asking for a reboot that changes nothing, and an automatic reboot taking the sites down for it.
+- unattended-upgrades takes the flag at `DEVOPSY_AUTO_REBOOT_TIME`, even on a day with nothing to upgrade.
+- `update-grub` runs while GRUB's config does not say what the drop-in does yet, never only when the drop-in was written, so a run cut between the two is finished by the next.
+- The docker step raises the socket buffers to 7.5 MB (`/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and `wmem_max`) for a Cloudflare Tunnel's QUIC, which otherwise warns and runs on the kernel's 208 KB maximum.
+- The socket buffers are here, not a setting nor a template's: `net.core` is the host kernel's, not a network namespace's, so no project can set it, and it changes nothing without a tunnel.
+- Sysctl files are written with `write_file` and applied with `sysctl -p` on every run (as the swap step's `vm.swappiness`), never only when written, so a run failing at `sysctl` is finished by the next.
+- `daemon.json` is merged, never written whole (`step_docker`, with `jq`): its four keys (`log-driver`, `log-opts`, `live-restore`, `default-address-pools`) are setup's and replaced, with a warning when they held something else, and every other key stays, since others edit that file too (for example an HTTP proxy's `proxies`).
+- The address pools are a setting, `DEVOPSY_ADDRESS_POOLS`, which the warning names, so no prompt: setup.sh often runs without a terminal (`curl | bash`), with nowhere to remember a choice, and the pools are the one key to change.
+- `daemon.json` is compared as JSON (`jq -cS`), so a file saying the same in other words is not rewritten and Docker not restarted.
+- A `daemon.json` that is not a JSON object stops setup.sh, the file as it is.
+- A key setup.sh stops setting is left in `daemon.json`.
+- Docker looks for AppArmor once per daemon, so `apparmor` installed under a running daemon changes nothing until it restarts: `docker_apparmor` restarts Docker when the kernel's `enabled` flag is Y, securityfs has apparmor, `/sbin/apparmor_parser` is there (Docker's own test; without the parser it only warns) and `docker info` lacks `name=apparmor`, once, since the restarted daemon reports it.
+- Running containers keep their profile (none) through that restart (`live-restore`) until they next start.
+- Provider block volumes are mounted by hand before setup, where releases should live (for example `/srv`, a `srv.mount` replacing the provider's unit, with `DEVOPSY_ROOT=/srv`), and Docker waits for the mount (`RequiresMountsFor=/srv` in a `docker.service.d` drop-in): containers starting before it write their bind mounts to the root disk, hidden under the volume.
+- Ubuntu's `sudo` is sudo-rs, which reads `/etc/sudoers.d` too, and its kernel has AppArmor, which Docker applies to containers (`docker-default`).
 
 ## Checks
 
@@ -417,44 +164,24 @@ docker run --rm -v "$PWD:/w:ro" debian:trixie sh -c 'apt-get update -qq &&
   cloud-init schema -c /w/cloud-init.yaml'
 ```
 
-It is tested on a cloud server (above, "The XFS root"), the smallest
-size, deleted afterwards.
+`setup.sh` on both releases at once, about a minute (`test/run.sh ubuntu:26.04` runs one):
 
-`test/run.sh` runs `setup.sh` twice on Debian 13 and Ubuntu 26.04 at
-once, each in a privileged container with systemd as its first process
-and its own Docker (`test/Dockerfile`, systemd-resolved added as cloud
-images have it), and checks what the first run set up (Docker, the
-deploy user and its keys, devopsy, the socket buffers, LLMNR closed:
-open before on Debian, so the check means something; the kernel's
-arguments for kexec's memory and the restart flag, from kdump's
-drop-in and an `update-grub` planted in both, which builds GRUB's config
-from the drop-ins) and that the second wrote, created, restarted and updated
-nothing, keeping a key of another's added to `daemon.json` before it;
-then a third run from pools changed by hand there, replaced with a
-warning, with `DEVOPSY_KDUMP=off`, and a fourth with `on`, which puts the
-crash kernel and kdump-tools back. About a minute locally;
-`test/run.sh ubuntu:26.04` runs one. A new check goes there, and a new
-supported release is a line of its default list and of the workflow's
-matrix. What it cannot show: AppArmor (the container shares the host's
-kernel: on a kernel with AppArmor, Docker inside loads its profile
-there), swap (`DEVOPSY_SWAP` stays empty: `swapon` would act on the
-host), `--help` and saved settings by hand, and the XFS conversion
-(above). The socket buffers it sets are the host's.
+```sh
+test/run.sh
+```
 
-CI (`.github/workflows/`): `lint` (the shellcheck and schema checks
-above) on every push; `setup` (`test/run.sh`, one job per distribution)
-on a push that changes `setup.sh` or the test, weekly (Docker's
-repository, the distributions' packages and defaults and devopsy's
-installer change without a commit here) and on demand. A newer push to
-a branch cancels the run before it (`concurrency`). Free: the
-repository is public.
+- `test/run.sh` runs `setup.sh` in a privileged container per release, systemd its first process, with its own Docker (`test/Dockerfile`, systemd-resolved added as cloud images have it), and checks what the first run set up, that a second wrote, created, restarted and updated nothing, and the runs after with changed settings.
+- What `test/run.sh` checks: Docker, the deploy user and its keys, devopsy, the socket buffers, LLMNR closed, the kernel's arguments for kexec's memory and the restart flag (from kdump's drop-in and an `update-grub` planted in both), a key of another's in `daemon.json` kept, pools changed by hand replaced with a warning, and `DEVOPSY_KDUMP` off then on.
+- A new check goes in `test/run.sh`, and a new supported release is a line of its default list and of `setup.yml`'s matrix.
+- `test/run.sh` cannot show AppArmor (the container shares the host's kernel), swap (`DEVOPSY_SWAP` stays empty, since `swapon` would act on the host), `--help` and saved settings, or the XFS conversion; the socket buffers it sets are the host's.
+- CI runs `lint.yml` (shellcheck and the schema) on every push, and `setup.yml` (`test/run.sh`, one job per release) on a push that changes `setup.sh` or the test, weekly (Docker's repository, the releases' packages and defaults and devopsy's installer change without a commit here) and on demand; a newer push to a branch cancels the run before it.
+- What a container cannot show is checked on a real machine, an OrbStack one (`orb create debian:trixie devopsy-test`, `orb create ubuntu:resolute devopsy-test`) or a cloud server: the script with test settings, again without them, `--help`, then the machine deleted (`orb delete -f devopsy-test`).
+- OrbStack machines lack openssh-server and mask systemd-resolved; to reproduce the cloud's port 53 clash, bind a listener to 127.0.0.53:53 before starting acme-dns.
+- Right after a file is edited, OrbStack's file sharing can serve a stale copy to a machine or a `docker run` mount, so a surprising result is run again before it is trusted.
+- Reaching a machine's IP or `<machine>.orb.local` from macOS makes OrbStack ask for admin rights, so go through `ssh <user>@<machine>@orb`, and test public DNS and certificates on a real server.
 
-For what the container cannot show, a real machine: an OrbStack one
-(`orb create debian:trixie devopsy-test`, `orb create ubuntu:resolute
-devopsy-test`; it masks systemd-resolved) or a cloud server. Run the
-script with test settings, again without them, check `--help`, then
-`orb delete -f devopsy-test`.
+## Areas
 
-## Commits
+Each area is read when its line says so; its history, `internals/<area>.history.md`, as Workflow's Docs says. The root's own sections have `internals/rules.history.md`, `internals/steps.history.md` and `internals/checks.history.md`.
 
-Conventional commits (`feat:`, `fix:`, `docs:`, `build:`...).
+- `internals/xfs.md`: the XFS root, boot by boot, its layouts, GRUB, the partitions' numbers and names, Ubuntu's and Vultr's differences, what it refuses and how it is tested (`cloud-init.yaml`); read when a task touches `cloud-init.yaml` or a server's disk layout.
