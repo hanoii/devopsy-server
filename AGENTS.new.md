@@ -7,7 +7,7 @@ devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for [devopsy](https://g
 - `setup.sh`: the settings (`load_settings`, `validate_settings`, `save_settings`, `usage`), `preflight`, then one `step_*` function per step, run in order by `main`.
 - `cloud-init.yaml`: the XFS conversion, its scripts in `write_files` (`internals/xfs.md`).
 - `test/run.sh` and `test/Dockerfile`: `setup.sh` run in containers (Checks); `.github/workflows/`: `lint.yml` and `setup.yml`.
-- `README.md` is the user-facing behavior, kept in step with every change: the steps table, the settings table, "An XFS root", "Without the script" (each step by hand, so a change to a `step_*` function changes its commands there) and "Things to know".
+- `README.md` and `docs/` are the user-facing behavior, kept in step with every change: the README's steps and settings tables, `docs/xfs.md`, `docs/without-the-script.md` (each step by hand, so a change to a `step_*` function changes its commands there) and `docs/things-to-know.md`.
 
 ## Rules
 
