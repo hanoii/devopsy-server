@@ -1,6 +1,6 @@
 #cloud-config
 # devopsy-server: an XFS root for a new server, as its user data
-# (README.md, "An XFS root"). Converts the image's ext4 root to XFS on
+# (docs/xfs.md). Converts the image's ext4 root to XFS on
 # the first boots, so every file on the server can be copied with
 # reflinks, then leaves the distribution as it is: the XFS root as
 # partition 1 where the root was (DigitalOcean's restore of a snapshot
