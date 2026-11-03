@@ -41,8 +41,8 @@ and removes its keys from your machine. A machine's key (CI) gets `add
 on a
 server](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#keys-on-a-server)).
 
-The server has no access to your repository. Releases are pushed over
-SSH, and nothing listens for webhooks.
+Nothing on the server refers to your repository: no clone, URL or deploy
+key. Releases are pushed over SSH, and nothing listens for webhooks.
 
 ## Security updates
 
@@ -100,8 +100,8 @@ says so. To add to it, delete that line and set `releases: root`
 yourself.
 
 A snapshot carries the environment's `shared/.env`, where its secrets
-live; without it, a database password a release generated no longer
-matches the database. Without snapshots, back up `shared/.env`,
+live. Without that file, a database password a release generated no
+longer matches the database. Without snapshots, back up `shared/.env`,
 `shared/mnt` (databases as dumps) and `.devopsy-data-images` beside them.
 
 Your provider's disk backups restore the whole server as on any other,

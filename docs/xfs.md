@@ -2,8 +2,8 @@
 
 `cloud-init.yaml` is user data for a new server. On its first boots it
 converts the root from ext4 to XFS, which copies files with reflinks.
-Copies of data on the server, an environment's including its database,
-take seconds at any size, sharing blocks until written.
+Copies of data on the server (an environment's, for example, with its
+database) take seconds at any size, sharing blocks until written.
 Everything stays on one filesystem the size of the disk (the system,
 releases, Docker's images and volumes), and a disk resize grows it.
 
@@ -19,7 +19,8 @@ before anything is on the disk.
    cloud-init.yaml`.
 2. It reboots twice on its own, about three minutes, then is ready:
    `findmnt /` says `xfs`, and `grep devopsy-xfs
-   /var/log/cloud-init-output.log` ends with "done, the root is XFS".
+   /var/log/cloud-init-output.log` ends with "done, the root is XFS",
+   each line with its time.
 3. Run `setup.sh` as usual ([README](../README.md#usage)), then reboot
    once. The kernel's memory for kexec is freed from the next boot (the
    `base` step).
@@ -76,9 +77,10 @@ on DigitalOcean), and power on.
 
 ## Snapshots and backups
 
-The provider's snapshots and backups restore onto a new server (a larger
-one grows to its disk) or by a rebuild. DigitalOcean expects the root as
-partition 1, which is where the conversion leaves it.
+The provider's snapshots and backups restore as on any server, onto a
+new server (a larger one grows to its disk) or by a rebuild.
+DigitalOcean expects the root as partition 1, which is where the
+conversion leaves it.
 
 ## What is refused
 
