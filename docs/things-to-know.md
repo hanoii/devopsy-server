@@ -128,11 +128,13 @@ releases](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#enviro
 
 ## A block volume
 
-Providers mount volumes elsewhere (DigitalOcean: `/mnt/<volume>`). Mount
-it where releases should live, like `/srv`, set `DEVOPSY_ROOT=/srv`, and
-add `RequiresMountsFor=/srv` to a `docker.service.d` drop-in, so
-containers never start before it. The home directory, with `.ssh`, stays
-off the volume. Docker's named volumes stay on the root disk.
+Providers mount volumes elsewhere (DigitalOcean: `/mnt/<volume>`).
+Replace the provider's unit with one that mounts it where releases should
+live, like `/srv`, set `DEVOPSY_ROOT=/srv`, and add
+`RequiresMountsFor=/srv` to a `docker.service.d` drop-in, so Docker never
+starts without it. An fstab `x-systemd.before=docker.service` is not
+enough: it only orders the two, and Docker still starts when the volume is
+missing. The home directory, with `.ssh`, stays off the volume. Docker's named volumes stay on the root disk.
 
 ## Docker networks
 
