@@ -27,6 +27,10 @@ Of the host's own services, only SSH listens publicly. The `base` step
 closes systemd-resolved's LLMNR (5355), which Debian leaves open on every
 address.
 
+Every container reaches what the host listens on beyond loopback, through
+its bridge, whatever the provider's firewall lets in: a service of the
+host's that containers must not reach listens on `127.0.0.1` only.
+
 ## SSH and keys
 
 `setup.sh` never changes the SSH server. Set it up as your provider does,
