@@ -81,6 +81,10 @@ test_one() {
       >/usr/local/sbin/update-grub && chmod 755 /usr/local/sbin/update-grub &&
     printf "%s\n" "[Service]" "Type=oneshot" "ExecStart=/bin/true" "[Install]" "WantedBy=multi-user.target" \
       >/etc/systemd/system/kdump-tools.service && systemctl enable --quiet kdump-tools.service'
+  # A line for /proc of someone else's, which setup's replaces.
+  x sh -c 'echo "proc /proc proc defaults 0 0" >>/etc/fstab'
+  # polkit running, as after a first caller: setup restarts it into its group.
+  x systemctl start polkit || fail "polkit did not start"
 
   echo "== $base: first run"
   x bash /src/setup.sh || fail "the first run failed"
@@ -104,6 +108,22 @@ test_one() {
     fail "LLMNR is still open"
   fi
   x grep -q ' kho=off' /boot/grub/grub.cfg || fail "GRUB's config lacks kho=off"
+  # Other users' processes hidden, the deploy user and polkit seeing them
+  # all (the container's /proc is its own). A line of someone else's for
+  # /proc was planted before the run: one line for /proc is left, setup's.
+  local gid
+  gid=$(x getent group devopsy-proc | cut -d: -f3) || fail "no devopsy-proc group"
+  # shellcheck disable=SC2016 # awk's own fields
+  [ "$(x awk '$1 !~ /^#/ && $2 == "/proc"' /etc/fstab)" = "proc /proc proc nosuid,nodev,noexec,hidepid=invisible,gid=$gid 0 0" ] ||
+    fail "/etc/fstab's line for /proc is not setup's alone: $(x grep /proc /etc/fstab)"
+  x findmnt -no OPTIONS /proc | grep -q "gid=$gid,hidepid=invisible" || fail "/proc is not mounted hiding processes"
+  x useradd -m other
+  if x runuser -u other -- test -d /proc/1; then
+    fail "another user sees root's processes"
+  fi
+  x runuser -u devopsy -- test -d /proc/1 || fail "devopsy does not see every user's processes"
+  x sh -c "awk '\$1 == \"Groups:\"' /proc/\$(systemctl show -p MainPID --value polkit)/status" | grep -qw "$gid" ||
+    fail "polkit is not in the devopsy-proc group"
   # kdump as the image has it: DEVOPSY_KDUMP is on by default.
   x grep -q ' crashkernel=' /boot/grub/grub.cfg || fail "the first run took kdump's crash kernel out"
   x systemctl is-enabled --quiet kdump-tools.service || fail "the first run disabled kdump-tools"
@@ -131,7 +151,7 @@ test_one() {
   }
   cat "$out/$name.second"
   # What only a change logs: every run upgrades the packages and devopsy.
-  if grep -E 'wrote |restarting|updating|disabling|user: creating|cli: installing|linked' "$out/$name.second"; then
+  if grep -E 'wrote |restarting|updating|disabling|creating|hiding|replacing|cli: installing|linked' "$out/$name.second"; then
     fail "the second run changed something"
   fi
   [ "$(x sh -c 'wc -l </tmp/update-grub.runs')" = 1 ] || fail "update-grub did not run exactly once"
