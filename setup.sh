@@ -208,6 +208,8 @@ EOF
     systemctl restart systemd-resolved
   fi
 
+  base_processes
+
   # Memory the kernel keeps for kexec, which nothing on a server uses.
   # Kexec HandOver's scratch memory, held for movable pages only by a
   # kernel that turns it on by default (Ubuntu 26.04's: 646 MB of 2 GB on
@@ -274,6 +276,55 @@ EOF
   elif [ "$kdump" = on ] && [ "$(systemctl is-enabled kdump-tools.service 2>/dev/null)" = disabled ]; then
     log "base: enabling kdump-tools (DEVOPSY_KDUMP=on)"
     systemctl enable --quiet kdump-tools.service
+  fi
+}
+
+# Every user sees only its own processes (/proc's hidepid=invisible): a
+# process's command line, a session's whole script among them, names
+# projects, paths and arguments, which another user of the server has no
+# business reading. The devopsy-proc group still sees them all, as root
+# does: the deploy user (step_user), root-equivalent through docker
+# anyway, and polkit, which reads its callers' /proc to answer for them.
+# The kernel takes the group by number only. The fstab line, which
+# systemd-remount-fs applies at boot, names /proc's own flags, which its
+# defaults would drop, and takes the place of any other line for /proc.
+# /proc is remounted, and polkit restarted, while they do not say it yet,
+# so a run cut after writing is finished by the next, and an applied one
+# changes nothing.
+base_processes() {
+  local group=devopsy-proc marker='# Written by devopsy-server (setup.sh, base): every user sees only its own processes.'
+  local gid line others tmp pid opts written=''
+  if ! getent group "$group" >/dev/null; then
+    log "base: creating the $group group, which sees every user's processes"
+    groupadd --system "$group"
+  fi
+  gid=$(getent group "$group" | cut -d: -f3)
+  line="proc /proc proc nosuid,nodev,noexec,hidepid=invisible,gid=$gid 0 0"
+  others=$(awk -v m="$marker" -v l="$line" '$0 != m && $0 != l && $1 !~ /^#/ && $2 == "/proc"' /etc/fstab 2>/dev/null) || true
+  [ -z "$others" ] || warn "base: replacing /etc/fstab's line for /proc ($others), so other users' processes stay hidden"
+  tmp=$(mktemp)
+  {
+    if [ -f /etc/fstab ]; then awk -v m="$marker" '$0 != m && !($1 !~ /^#/ && $2 == "/proc")' /etc/fstab; fi
+    printf '%s\n%s\n' "$marker" "$line"
+  } >"$tmp"
+  write_file /etc/fstab 644 <"$tmp" || true
+  rm -f "$tmp"
+  opts=,$(findmnt -no OPTIONS /proc),
+  if [[ $opts != *,hidepid=invisible,* || $opts != *,gid=$gid,* ]]; then
+    log "base: hiding other users' processes (/proc hidepid=invisible, the $group group sees them all)"
+    mount -o remount,hidepid=invisible,gid="$gid" /proc
+  fi
+  write_file /etc/systemd/system/polkit.service.d/90-devopsy.conf <<EOF && written=1
+[Service]
+SupplementaryGroups=$group
+EOF
+  if [ -n "$written" ] || [ "$(systemctl show -p NeedDaemonReload --value polkit.service 2>/dev/null)" = yes ]; then
+    systemctl daemon-reload
+  fi
+  pid=$(systemctl show -p MainPID --value polkit.service 2>/dev/null) || pid=0
+  if [ "${pid:-0}" != 0 ] && ! awk -v g="$gid" '$1 == "Groups:" { for (i = 2; i <= NF; i++) if ($i == g) f = 1 } END { exit !f }' "/proc/$pid/status"; then
+    log "base: restarting polkit, in the $group group to see its callers"
+    systemctl restart polkit.service
   fi
 }
 
@@ -427,6 +478,9 @@ step_user() {
   if getent group docker >/dev/null; then
     usermod -aG docker "$DEVOPSY_USER"
   fi
+  # Every user's processes (base_processes): hiding them from a user that
+  # is root-equivalent protects nothing.
+  usermod -aG devopsy-proc "$DEVOPSY_USER"
 
   step_user_root
 
