@@ -99,39 +99,18 @@ EOF
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   apparmor docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-# a new daemon.json; on one that exists, add or replace these four keys
-cat > /etc/docker/daemon.json <<'EOF'
-{
-  "log-driver": "local",
-  "log-opts": {
-    "max-size": "20m",
-    "max-file": "5"
-  },
-  "live-restore": true,
-  "default-address-pools": [
-    {"base": "172.16.0.0/12", "size": 24},
-    {"base": "192.168.0.0/16", "size": 24}
-  ]
-}
-EOF
-systemctl restart docker
-systemctl enable docker
-
-printf 'net.core.rmem_max = 7500000\nnet.core.wmem_max = 7500000\n' > /etc/sysctl.d/90-devopsy-net.conf
-sysctl -p /etc/sysctl.d/90-devopsy-net.conf
-
+systemctl enable --now docker
 ```
 
-Rotated logs keep containers from filling the disk, and `live-restore`
-keeps them running while Docker upgrades. For the address pools, see
-["Docker networks"](things-to-know.md#docker-networks).
-
-The socket buffers are for QUIC. A Cloudflare Tunnel's connector
-(`cloudflared`) asks the kernel for 7.5 MB, and where the default
-maximum is about 200 KB it runs with smaller buffers and warns. The
-setting is host-wide, so containers get it, and it has no effect without
-a tunnel.
+`daemon.json` (rotated logs, `live-restore`, the address pools) and the
+socket buffers are not set here: devopsy's `--server-setup` sets them
+([cli](#cli)). Rotated logs keep containers from filling the disk, and
+`live-restore` keeps them running while Docker upgrades. For the address
+pools, see ["Docker networks"](things-to-know.md#docker-networks). The socket
+buffers, 7.5 MB, are what a Cloudflare Tunnel's connector (`cloudflared`)
+asks for its QUIC, which otherwise runs on the kernel's 208 KB maximum
+and warns; the setting is host-wide, and changes nothing without a
+tunnel.
 
 ## user
 
@@ -153,10 +132,11 @@ chmod 440 /etc/sudoers.d/90-devopsy
 ```
 
 Optional, releases elsewhere than the home (`DEVOPSY_ROOT`), like a block
-volume mounted on `/srv` (see ["A block volume"](things-to-know.md#a-block-volume)):
+volume mounted on `/srv` (see ["A block volume"](things-to-know.md#a-block-volume)),
+where devopsy's `--server-setup` makes or gives the directory. The
+config file:
 
 ```sh
-install -d -o devopsy -g devopsy /srv
 install -d -m 755 -o devopsy -g devopsy /home/devopsy/.config /home/devopsy/.config/devopsy
 printf 'releases:\n  root: /srv\n' > /home/devopsy/.config/devopsy/config.yaml
 chown devopsy:devopsy /home/devopsy/.config/devopsy/config.yaml
@@ -200,4 +180,11 @@ ln -s /usr/local/lib/devopsy/devopsy /usr/local/bin/devopsy
 
 Check: `runuser -u devopsy -- docker ps` and `runuser -u devopsy --
 devopsy --version`.
+
+Then run devopsy's own part from your machine, the command `setup.sh`
+prints at its end (devopsy-cli's [`--server-setup`](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#--server-setup)):
+
+```sh
+devopsy @devopsy@<server>: --server-setup
+```
 
