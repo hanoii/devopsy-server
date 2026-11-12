@@ -31,6 +31,11 @@ Every container reaches what the host listens on beyond loopback, through
 its bridge, whatever the provider's firewall lets in: a service of the
 host's that containers must not reach listens on `127.0.0.1` only.
 
+devopsy's `--server-setup` loads a firewall of its own that filters no
+inbound traffic: it keeps containers off the cloud's metadata services,
+where an app could read its instance's credentials, except their DNS
+(devopsy-cli's [`--server-setup`](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#--server-setup)).
+
 ## SSH and keys
 
 `setup.sh` never changes the SSH server. Set it up as your provider does,
@@ -69,8 +74,8 @@ The distribution's security updates are installed daily by
 unattended-upgrades. A kernel update waits for a reboot by hand unless
 `DEVOPSY_AUTO_REBOOT_TIME` is set.
 
-Docker is upgraded by a rerun of setup or `apt upgrade`, with
-`live-restore` keeping containers running meanwhile.
+A rerun of setup or `apt upgrade` upgrades Docker. `live-restore`, which
+devopsy's `--server-setup` sets, keeps containers running meanwhile.
 
 The deploy user owns `devopsy`, so `devopsy @<server> --upgrade` upgrades
 it from your machine, without root (`--upgrade vX.Y.Z` for a given
@@ -149,17 +154,25 @@ releases](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#enviro
 
 Providers mount volumes elsewhere (DigitalOcean: `/mnt/<volume>`).
 Replace the provider's unit with one that mounts it where releases should
-live, like `/srv`, set `DEVOPSY_ROOT=/srv`, and add
-`RequiresMountsFor=/srv` to a `docker.service.d` drop-in, so Docker never
-starts without it. An fstab `x-systemd.before=docker.service` is not
-enough: it only orders the two, and Docker still starts when the volume is
-missing. The home directory, with `.ssh`, stays off the volume. Docker's named volumes stay on the root disk.
+live, like `/srv`, and set `DEVOPSY_ROOT=/srv`. devopsy's `--server-setup`
+then gives the directory to the deploy user, as it does one root owns and
+that is empty (a fresh volume's `lost+found` aside), and refuses one root
+owns that holds files, or another user's. It adds a `docker.service.d` drop-in
+with `RequiresMountsFor=` set to the release root, so Docker never starts
+without the volume: containers starting before it would write their bind
+mounts to the root disk, hidden under the volume. An fstab
+`x-systemd.before=docker.service` is not enough: it only orders the two,
+and Docker still starts when the volume is missing. The home directory,
+with `.ssh`, stays off the volume. Docker's named volumes stay on the root
+disk.
 
 ## Docker networks
 
 Docker's default pools allow about 30 networks per host, and every
-project environment takes at least one. Cut into /24s, the same ranges
-give thousands. Existing networks keep their size until recreated
-(`devopsy down`, then `up`). Where the server must reach hosts in these
-ranges (a corporate network on `172.16.0.0/12`), set
-`DEVOPSY_ADDRESS_POOLS` to ranges nobody uses.
+project environment takes at least one. devopsy's `--server-setup` cuts
+the same ranges into /24s, which give thousands. Existing networks keep
+their size until recreated (`devopsy down`, then `up`). Where the server
+must reach hosts in these ranges (a corporate network on
+`172.16.0.0/12`), write ranges nobody uses in `daemon.json`'s
+`default-address-pools`: `--server-setup` asks whether to keep them, and
+asks no more while they are unchanged.

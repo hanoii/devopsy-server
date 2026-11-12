@@ -18,7 +18,7 @@ CONFIG_FILE=/etc/devopsy/server.env
 # Settings saved to $CONFIG_FILE. A new one also goes in usage and README.md.
 SETTINGS=(
   DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SWAP DEVOPSY_AUTO_REBOOT_TIME
-  DEVOPSY_APT_PACKAGES DEVOPSY_ROOT DEVOPSY_ADDRESS_POOLS DEVOPSY_KDUMP
+  DEVOPSY_APT_PACKAGES DEVOPSY_ROOT DEVOPSY_KDUMP
 )
 
 usage() {
@@ -43,9 +43,6 @@ Settings are environment variables, all optional:
                             time, like 04:00. Default: never.
   DEVOPSY_APT_PACKAGES      Extra apt packages, space separated, like
                             "htop ncdu".
-  DEVOPSY_ADDRESS_POOLS     Ranges Docker cuts into /24 networks, space
-                            separated. Default: "172.16.0.0/12
-                            192.168.0.0/16".
   DEVOPSY_SUDO              1 gives the deploy user passwordless sudo.
                             Default: 0.
   DEVOPSY_KDUMP             off frees the memory kdump reserves for a crash
@@ -93,7 +90,6 @@ load_settings() {
   DEVOPSY_AUTO_REBOOT_TIME=${DEVOPSY_AUTO_REBOOT_TIME:-}
   DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
   DEVOPSY_ROOT=${DEVOPSY_ROOT:-}
-  DEVOPSY_ADDRESS_POOLS=${DEVOPSY_ADDRESS_POOLS:-172.16.0.0/12 192.168.0.0/16}
   DEVOPSY_KDUMP=${DEVOPSY_KDUMP:-on}
 }
 
@@ -109,11 +105,6 @@ validate_settings() {
       || die "DEVOPSY_ROOT must be an absolute directory, not /: $DEVOPSY_ROOT"
   fi
   case $DEVOPSY_KDUMP in on | off) ;; *) die "DEVOPSY_KDUMP is on or off, not '$DEVOPSY_KDUMP'" ;; esac
-  local pool cidr_re='^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|1[0-9]|2[0-4])$'
-  [ -n "$DEVOPSY_ADDRESS_POOLS" ] || die "DEVOPSY_ADDRESS_POOLS needs at least one range"
-  for pool in $DEVOPSY_ADDRESS_POOLS; do
-    [[ $pool =~ $cidr_re ]] || die "'$pool' in DEVOPSY_ADDRESS_POOLS is not a range of /24 or larger, like 10.200.0.0/16"
-  done
 }
 
 save_settings() {
@@ -389,57 +380,10 @@ EOF
   log "docker: installing"
   apt_install apparmor docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-  # Rotated logs, so containers cannot fill the disk, and live-restore, so a
-  # Docker upgrade does not stop running containers. Address pools of /24
-  # networks: Docker's default cuts nearly the same ranges into /16 and /20,
-  # about 30 networks, and every project environment takes at least one.
-  # The ranges are a setting: a server that must reach a corporate network
-  # in them names others, and a rerun keeps them.
-  # Merged into daemon.json, which others edit too (a proxy's `proxies`):
-  # these four keys are setup's, replaced with a warning when changed,
-  # and every other key stays. Compared as JSON, so a file that says the
-  # same in other words is not rewritten and Docker not restarted.
-  local daemon=/etc/docker/daemon.json ours current='{}' merged key
-  ours=$(jq -n --arg pools "$DEVOPSY_ADDRESS_POOLS" '{
-    "log-driver": "local",
-    "log-opts": {"max-size": "20m", "max-file": "5"},
-    "live-restore": true,
-    "default-address-pools": [$pools | splits(" +") | select(. != "") | {base: ., size: 24}]
-  }')
-  if [ -s "$daemon" ]; then
-    current=$(jq -e 'if type == "object" then . else error end' "$daemon" 2>/dev/null) ||
-      die "$daemon is not a JSON object: fix it, then run setup.sh again"
-    for key in $(jq -r 'keys[]' <<<"$ours"); do
-      if jq -e --arg k "$key" 'has($k)' <<<"$current" >/dev/null &&
-        [ "$(jq -cS --arg k "$key" '.[$k]' <<<"$current")" != "$(jq -cS --arg k "$key" '.[$k]' <<<"$ours")" ]; then
-        if [ "$key" = default-address-pools ]; then
-          warn "docker: $key in $daemon differs from DEVOPSY_ADDRESS_POOLS, replaced: set that to keep other pools"
-        else
-          warn "docker: $key in $daemon was changed, replaced by setup.sh's"
-        fi
-      fi
-    done
-  fi
-  merged=$(jq -s '.[0] + .[1]' <(printf '%s' "$current") <(printf '%s' "$ours"))
-  if [ "$(jq -cS . <<<"$current")" != "$(jq -cS . <<<"$merged")" ]; then
-    printf '%s\n' "$merged" | write_file "$daemon" || true
-    log "docker: restarting to apply daemon.json"
-    systemctl restart docker
-  fi
+  # daemon.json, the socket buffers and the release root's mounts are
+  # devopsy's --server-setup's, which main names last.
   systemctl enable --now docker >/dev/null 2>&1
   docker_apparmor
-
-  # Socket buffers for QUIC: net.core is the host kernel's, not a network
-  # namespace's, so a container gets what the host allows. cloudflared (a
-  # Cloudflare Tunnel's connector, quic-go) asks for 7.5 MB and warns, then
-  # runs with smaller buffers, where the maximum is the kernel's 208 KB
-  # default. Harmless without a tunnel.
-  # Applied on every run, as swap's.
-  write_file /etc/sysctl.d/90-devopsy-net.conf <<'EOF' || true
-net.core.rmem_max = 7500000
-net.core.wmem_max = 7500000
-EOF
-  sysctl -q -p /etc/sysctl.d/90-devopsy-net.conf
 }
 
 # Docker (containerd's check, behind a sync.Once) looks for AppArmor once
@@ -526,7 +470,8 @@ step_user() {
 # Where releases live: the deploy user's home, unless DEVOPSY_ROOT names
 # another directory (a block volume, say). devopsy reads it from the deploy
 # user's own config, releases: root; this step writes that file, marked as
-# its own, and never touches one it did not write.
+# its own, and never touches one it did not write. devopsy's --server-setup
+# makes the directory and gives it to the deploy user.
 step_user_root() {
   local home config marker="# Written by devopsy-server (DEVOPSY_ROOT)."
   home=$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)
@@ -542,9 +487,6 @@ step_user_root() {
     fi
     return 0
   fi
-  # Not recursive: only the root itself, so releases create directories.
-  install -d "$DEVOPSY_ROOT"
-  chown "$DEVOPSY_USER:$DEVOPSY_USER" "$DEVOPSY_ROOT"
   install -d -m 755 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$home/.config" "$home/.config/devopsy"
   printf '%s\nreleases:\n  root: %s\n' "$marker" "$DEVOPSY_ROOT" | write_file "$config" 644 || true
   chown "$DEVOPSY_USER:$DEVOPSY_USER" "$config"
@@ -611,6 +553,10 @@ main() {
     "step_$step"
   done
   log "done: ${STEPS[*]}"
+  # What devopsy sets up itself (daemon.json, the socket buffers, the release
+  # root and Docker's wait for it, the metadata firewall) runs from the
+  # operator's machine, which asks before it changes what someone set.
+  log "next, from your machine: devopsy @$DEVOPSY_USER@<server>: --server-setup"
 }
 
 main "$@"
