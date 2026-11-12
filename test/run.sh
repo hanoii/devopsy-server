@@ -180,8 +180,20 @@ test_one() {
     fail "DEVOPSY_KDUMP=off left kdump-tools enabled"
   fi
 
-  echo "== $base: fourth run, DEVOPSY_KDUMP=on"
-  x env DEVOPSY_KDUMP=on bash /src/setup.sh >"$out/$name.fourth" 2>&1 || {
+  # A swap file a run left on but not in fstab (cut between the two), which
+  # the next run finishes. swapon, mkswap and fallocate are fakes, their
+  # state in /tmp, and sysctl leaves vm.swappiness alone: the real ones
+  # would act on the host's kernel.
+  # shellcheck disable=SC2016 # expanded in the container
+  x sh -c 'printf "%s\n" "#!/bin/sh" "echo \"\$*\" >>/tmp/swap.calls" "case \$1 in --show=*) cat /tmp/swaps 2>/dev/null ;; *) echo \"\$1\" >>/tmp/swaps ;; esac" >/usr/local/sbin/swapon &&
+    printf "%s\n" "#!/bin/sh" "echo \"mkswap \$*\" >>/tmp/swap.calls" >/usr/local/sbin/mkswap &&
+    printf "%s\n" "#!/bin/sh" "echo \"fallocate \$*\" >>/tmp/swap.calls; : >\"\$3\"" >/usr/local/sbin/fallocate &&
+    printf "%s\n" "#!/bin/sh" "case \"\$*\" in *90-devopsy-swap.conf) exit 0 ;; esac" "exec /sbin/sysctl \"\$@\"" >/usr/local/sbin/sysctl &&
+    chmod 755 /usr/local/sbin/swapon /usr/local/sbin/mkswap /usr/local/sbin/fallocate /usr/local/sbin/sysctl &&
+    : >/swapfile && chmod 600 /swapfile && echo /swapfile >/tmp/swaps'
+
+  echo "== $base: fourth run, DEVOPSY_KDUMP=on, a swap file not in fstab"
+  x env DEVOPSY_KDUMP=on DEVOPSY_SWAP=64M bash /src/setup.sh >"$out/$name.fourth" 2>&1 || {
     cat "$out/$name.fourth"
     fail "the fourth run failed"
   }
@@ -190,6 +202,10 @@ test_one() {
   x systemctl is-enabled --quiet kdump-tools.service || fail "DEVOPSY_KDUMP=on did not enable kdump-tools again"
   x grep -qx devopsy-server /run/reboot-required.pkgs || fail "no restart asked to bring kdump back"
   x grep -q ' kho=off' /boot/grub/grub.cfg || fail "the fourth run lost kho=off"
+  x grep -qx '/swapfile none swap sw 0 0' /etc/fstab || fail "the fourth run left the swap file out of /etc/fstab"
+  if x grep -vx -e '--show=NAME --noheadings' /tmp/swap.calls; then
+    fail "the fourth run made or turned on a swap file that was on already"
+  fi
   rm -f "$out/$name.second"
   echo "== $base: ok"
 }

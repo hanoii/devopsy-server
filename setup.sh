@@ -333,15 +333,29 @@ step_swap() {
     log "swap: DEVOPSY_SWAP not set, skipping"
     return
   fi
-  if swapon --show=NAME --noheadings | grep -q .; then
+  # The file, that it is on, and its fstab line, each checked apart, so a
+  # run cut between them is finished by the next. The file is made under
+  # another name and renamed once it is a swap area. A server with a swap
+  # of its own and no /swapfile is left as it is.
+  if [ ! -f /swapfile ] && swapon --show=NAME --noheadings | grep -q .; then
     log "swap: already enabled"
   else
-    log "swap: creating /swapfile ($DEVOPSY_SWAP)"
-    fallocate -l "$DEVOPSY_SWAP" /swapfile
-    chmod 600 /swapfile
-    mkswap /swapfile >/dev/null
-    swapon /swapfile
-    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
+    if [ ! -f /swapfile ]; then
+      log "swap: creating /swapfile ($DEVOPSY_SWAP)"
+      rm -f /swapfile.new
+      fallocate -l "$DEVOPSY_SWAP" /swapfile.new
+      chmod 600 /swapfile.new
+      mkswap /swapfile.new >/dev/null
+      mv /swapfile.new /swapfile
+    fi
+    if ! swapon --show=NAME --noheadings | grep -qx /swapfile; then
+      log "swap: turning on /swapfile"
+      swapon /swapfile
+    fi
+    if ! grep -q '^/swapfile ' /etc/fstab; then
+      log "swap: /swapfile in /etc/fstab, on at every boot"
+      echo '/swapfile none swap sw 0 0' >>/etc/fstab
+    fi
   fi
   # Applied on every run, written or not: a first run that failed here
   # left the file, and the next would skip it.
