@@ -23,7 +23,7 @@ before anything is on the disk.
    each line with its time.
 3. Run `setup.sh` as usual ([README](../README.md#usage)), then reboot
    once. The kernel's memory for kexec is freed from the next boot (the
-   `base` step).
+   `kexec` step).
 
 The partitions after the conversion, by image:
 

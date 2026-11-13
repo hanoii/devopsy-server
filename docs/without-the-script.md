@@ -23,13 +23,21 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 # Ubuntu only: GNU's coreutils, in place of Rust's uutils
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   --allow-remove-essential coreutils-from-gnu coreutils-from-uutils-
+```
 
+## llmnr
+
+With `DEVOPSY_SERVER_LLMNR=off`, the default:
+
+```sh
 mkdir -p /etc/systemd/resolved.conf.d
 printf '[Resolve]\nLLMNR=no\nMulticastDNS=no\n' > /etc/systemd/resolved.conf.d/90-devopsy.conf
 systemctl try-restart systemd-resolved
 ```
 
 LLMNR is closed once `ss -ltun 'sport = :5355'` lists nothing.
+
+## kexec
 
 The kernel's arguments take effect at the next reboot ([Memory for
 kexec](things-to-know.md#memory-for-kexec)). With

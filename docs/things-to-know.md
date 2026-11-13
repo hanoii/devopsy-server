@@ -22,9 +22,9 @@ A host firewall like ufw does not help: Docker opens published ports past
 it. Only Traefik and its acme-dns publish ports. Publish anything else on
 `127.0.0.1` and reach it through an SSH tunnel.
 
-Of the host's own services, only SSH listens publicly. The `base` step
+Of the host's own services, only SSH listens publicly. The `llmnr` step
 closes systemd-resolved's LLMNR (port 5355), which Debian leaves open on
-every address.
+every address, unless `DEVOPSY_SERVER_LLMNR=on`.
 
 A container reaches any service of the host's that listens beyond
 loopback, through its bridge, whatever the provider's firewall lets in. A
@@ -80,7 +80,7 @@ server whose devopsy is too old for yours, and say why.
 
 ## Memory for kexec
 
-The `base` step adds `kho=off` to the kernel's command line on every
+The `kexec` step adds `kho=off` to the kernel's command line on every
 server. It frees the memory the kernel keeps for Kexec HandOver, which a
 server does not use. Ubuntu 26.04's kernel turns Kexec HandOver on and
 keeps up to 1.25 of 2 GB for it. That memory takes movable pages only, so

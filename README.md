@@ -36,8 +36,9 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh
 
 It first checks you want to go on, since it installs the base
 packages, Docker and devopsy, and upgrades them on later runs. Then it
-asks for the deploy user, the swap size, whether to install security
-updates automatically, and when to reboot after upgrades that need it.
+asks for the deploy user, the swap size, whether to turn off LLMNR and
+multicast DNS, whether to install security updates automatically, and
+when to reboot after upgrades that need it.
 If the image has kdump, it also asks whether to keep the memory kdump
 reserves. Each question shows its default; press Enter to keep it.
 
@@ -87,6 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh
 | --------------------------------- | --------- | - |
 | `DEVOPSY_SERVER_USER`             | `devopsy` | The deploy user devopsy logs in as. Only asked on the first run, and never changed after that. |
 | `DEVOPSY_SERVER_SWAP`             | by memory | Size of `/swapfile`, like `2G` or `512M`, or `none`. A new size resizes it without turning swap off, which needs room on `/` for a second file of the new size while it runs; if the disk can't fit it, you're asked again. `none` removes the swap file `setup.sh` made. The default goes by memory: the same as the memory up to 2.5 GB, `2G` up to 8.5 GB, and none above that. If the server already has a swap of its own, the default is none and it's left alone; giving a size takes over its `/swapfile`, if that's what it uses. |
+| `DEVOPSY_SERVER_LLMNR`            | `off`     | `off` turns off LLMNR and multicast DNS in systemd-resolved, name lookups on the local network that a server doesn't need. `on` leaves them as the image has them. |
 | `DEVOPSY_SERVER_UPGRADES`         | `on`      | `on` installs security updates automatically with unattended-upgrades. `off` turns that off again. |
 | `DEVOPSY_SERVER_AUTO_REBOOT_TIME` | `never`   | When to reboot after upgrades that need it, like `04:00`. Not asked while upgrades are off, since nothing reboots on its own then. |
 | `DEVOPSY_SERVER_KDUMP`            | `on`      | `off` frees the memory kdump reserves for a crash kernel and turns off kdump-tools, from the next reboot. `on` brings both back. Only asked if the image has kdump-tools. |
@@ -96,7 +98,9 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh
 
 | Step       | What it does |
 | ---------- | ------------ |
-| `base`     | Installs the tools devopsy uses, ssh, curl and unattended-upgrades, plus GNU coreutils on Ubuntu. Turns off LLMNR and multicast DNS in systemd-resolved. Frees the memory reserved for kexec, from the next reboot ([Memory for kexec](docs/things-to-know.md#memory-for-kexec)). |
+| `base`     | Installs the tools devopsy uses, ssh, curl and unattended-upgrades, plus GNU coreutils on Ubuntu. |
+| `llmnr`    | Turns off LLMNR and multicast DNS in systemd-resolved, or back on. |
+| `kexec`    | Frees the memory reserved for kexec, from the next reboot ([Memory for kexec](docs/things-to-know.md#memory-for-kexec)). |
 | `swap`     | Creates, resizes or removes `/swapfile`. |
 | `docker`   | Installs Docker Engine with the Buildx and Compose plugins from Docker's apt repository, and `apparmor`. |
 | `user`     | Creates the deploy user in the `docker` group and gives it root's SSH authorized keys. |
