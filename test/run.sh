@@ -40,6 +40,13 @@ cleanup() {
   done
 }
 trap cleanup EXIT
+# Images the containers' Docker runs, busybox for the test's container and
+# alpine:3 for devopsy's util image, pulled once by the host's Docker and
+# loaded into each: Docker Hub limits anonymous pulls, a few an hour.
+images=(busybox:1.37 alpine:3)
+for image in "${images[@]}"; do
+  docker image inspect "$image" >/dev/null 2>&1 || docker pull -q "$image" >/dev/null
+done
 
 # server_setup: devopsy's --server-setup --yes on the container, as the
 # operator runs it, over its own sshd to the deploy user; in test_one's
@@ -229,6 +236,7 @@ test_one() {
     fail "the second run replaced the devopsy given with --devopsy"
   fi
 
+  docker save "${images[@]}" | docker exec -i "$c" docker load -q >/dev/null || fail "the images did not load"
   server_setup
 
   # An older install's list of Docker's repository beside setup.sh's, its
