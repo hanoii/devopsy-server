@@ -362,6 +362,7 @@ EOF
   [ "$(x swapon --show=NAME --noheadings)" = /swapfile ] || fail "a swap of $big, more than the free disk, left /swapfile off"
 
   swap_resized
+  swap_own_and_stand_in
   echo "== $base: ok"
 }
 
@@ -441,6 +442,64 @@ swap_resized() {
   # shellcheck disable=SC2016 # expanded in the container
   x bash -c 'source <(sed "\$d" /src/setup.sh) && saved_DEVOPSY_SERVER_USER=devopsy && check_setting DEVOPSY_SERVER_USER deploy' | grep -q 'this server.s deploy user' ||
     fail "another deploy user than the one that exists was not refused"
+}
+
+# swap_own_and_stand_in: review round 2's failing tests, each naming its
+# bug; in test_one's scope (x, fail, at_tty, step_alone, out, name), after
+# swap_resized, which leaves no swap and no sysctl file.
+swap_own_and_stand_in() {
+  local log=$out/$name.sixth
+  # Bug: preflight still calls ask as before it set a variable (the
+  # question its first argument, in a command substitution), so at a
+  # terminal on another distribution the run dies on "$2: unbound variable"
+  # and never asks whether to go on.
+  echo "== $base: another distribution at a terminal is asked about"
+  # shellcheck disable=SC2016 # expanded in the container
+  x sh -c 'sed "s/^VERSION_ID=.*/VERSION_ID=1/" /etc/os-release >/tmp/os-release.other && mount --bind /tmp/os-release.other /etc/os-release &&
+    printf "%s\n" "source <(sed \"\\\$d\" /src/setup.sh)" "preflight" "echo went on" >/tmp/preflight.sh'
+  at_tty "$log" 'y\n' 'bash /tmp/preflight.sh' || true
+  x umount /etc/os-release
+  cat "$log"
+  grep -qF 'continue anyway? (y/N)' "$log" || fail "another distribution was not asked about at a terminal"
+  grep -q '^went on' "$log" || fail "y to another distribution did not go on"
+  rm -f "$log"
+
+  # Bug: a /swapfile setup.sh did not make (no sysctl file of its) counts
+  # as no swap of the server's own (own_swaps leaves it out whoever made
+  # it), so the size by the memory is the default and a run without a
+  # terminal resizes the server's own swap file, unasked. 2 GB of memory
+  # here, the host's being more than swap_for_ram gives a swap for.
+  echo "== $base: a /swapfile of the server's own is offered none"
+  # shellcheck disable=SC2016 # expanded in the container
+  x sh -c 'sed "s/^MemTotal:.*/MemTotal: 2000000 kB/" /proc/meminfo >/tmp/meminfo && mount --bind /tmp/meminfo /proc/meminfo &&
+    truncate -s 64M /swapfile && chmod 600 /swapfile && swapon /swapfile'
+  local offered
+  # shellcheck disable=SC2016 # expanded in the container
+  offered=$(x bash -c 'source <(sed "\$d" /src/setup.sh) && swap_default')
+  x sh -c 'umount /proc/meminfo && swapoff /swapfile && rm /swapfile'
+  [ -z "$offered" ] || fail "a server with a /swapfile of its own is offered $offered, not none: a run without a terminal would resize it"
+
+  # Bug: none with the stand-in of a cut resize still on: where its
+  # swapoff fails and /swapfile's does not (the pages of /swapfile go to
+  # the stand-in), the sysctl file goes all the same, so the next run
+  # skips and the stand-in stays on for good, though the warning says the
+  # next run tries again.
+  echo "== $base: none, the stand-in's swapoff failing once"
+  x sh -c 'echo "vm.swappiness = 10" >/etc/sysctl.d/90-devopsy-swap.conf &&
+    truncate -s 64M /swapfile /swapfile.tmp && swapon /swapfile && swapon /swapfile.tmp && echo /swapfile.tmp >/tmp/swapoff.fail'
+  step_alone swap DEVOPSY_SERVER_SWAP=
+  x rm /tmp/swapoff.fail
+  step_alone swap DEVOPSY_SERVER_SWAP=
+  rm -f "$out/$name.step"
+  [ -z "$(x swapon --show=NAME --noheadings)" ] || fail "none left the stand-in on, the run after its failed swapoff skipping: $(x swapon --show=NAME --noheadings)"
+  if x test -e /swapfile.tmp; then fail "none left /swapfile.tmp"; fi
+
+  # Bug: a size past 2^63 bytes wraps in swap_bytes (17179869184G is 0),
+  # so it passes the check of the room on /, is saved, and fails at
+  # fallocate on every run after.
+  # shellcheck disable=SC2016 # expanded in the container
+  [ -n "$(x bash -c 'source <(sed "\$d" /src/setup.sh) && check_setting DEVOPSY_SERVER_SWAP 17179869184G')" ] ||
+    fail "a swap of 17179869184G, which no disk holds, was not refused"
 }
 
 # Indexed, not associative: macOS's bash 3.2 has none.
