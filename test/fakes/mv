@@ -1,0 +1,16 @@
+#!/bin/sh
+# mv's fake (test/run.sh): the kernel renames neither a file it swaps on
+# nor another onto one (EPERM, vfs_rename's and may_delete's IS_SWAPFILE),
+# which swapon's fake lists by inode in /tmp/swaps; everything else, and
+# every file that is no /swapfile*, to the real one.
+for f in "$@"; do
+  case $f in
+    /swapfile*)
+      if [ -f /tmp/swaps ] && [ -e "$f" ] && grep -qx "$(stat -c %i "$f")" /tmp/swaps; then
+        echo "mv: cannot move to or from '$f', a swap file that is on: Operation not permitted" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done
+exec /bin/mv "$@"

@@ -329,6 +329,20 @@ swap_resized() {
   local log=$out/$name.fifth
   # shellcheck disable=SC2016 # the line itself
   [ "$(tail -n 1 setup.sh)" = 'main "$@"' ] || fail "setup.sh does not end with main \"\$@\": its steps cannot run alone"
+  # BUG (review, round 1): Ctrl-D at a question is no answer, and setup.sh
+  # says so ("no answer to"), yet goes on: ask's die ends only its own
+  # command substitution, an argument of normal_setting's, and the empty
+  # answer is the swap's none, saved, the server's swap file removed.
+  echo "== $base: Ctrl-D at the swap's question stops the run, the swap as it was"
+  local code=0
+  at_tty "$log" '\004\n\n' 'bash /src/setup.sh' || code=$?
+  x grep -qx 'DEVOPSY_SERVER_SWAP=64M' /etc/devopsy/server.env ||
+    fail "Ctrl-D at the swap's question was saved as an answer: $(x grep SWAP /etc/devopsy/server.env)"
+  [ "$(x swapon --show=NAME --noheadings)" = /swapfile ] || fail "Ctrl-D at the swap's question removed the swap file"
+  [ "$code" != 0 ] || fail "the run went on after no answer to a question"
+  # BUG (review, round 1): a resize renames /swapfile.new while it is on,
+  # which the kernel refuses (test/fakes/mv): the run fails with the old
+  # file off, and so does every run after it.
   echo "== $base: fifth run, at a terminal, the swap file resized to 128M"
   x sh -c ': >/tmp/swap.calls'
   at_tty "$log" '2g\n128M\n\n\n' 'bash /src/setup.sh' || {
