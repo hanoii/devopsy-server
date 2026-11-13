@@ -131,11 +131,13 @@ devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for [devopsy](https://g
 - `update-grub` runs while GRUB's config does not say what the drop-in does yet, never only when the drop-in was written, so a run cut between the two is finished by the next.
 - The swap step checks `/swapfile`, that it is on, and its fstab line each apart, the file made under another name and renamed once it is a swap area, so a run cut between them is finished by the next.
 - Sysctl files (the swap step's `vm.swappiness`) are written with `write_file` and applied with `sysctl -p` on every run, never only when written, so a run failing at `sysctl` is finished by the next.
-- `jq` stays among the base packages: `test/run.sh` edits `daemon.json` with it on the server.
+- The base packages are devopsy's tools (devopsy-cli's `--server-setup-howto tools`), `openssh-client` for a sync across servers, and what the steps fetch with and run, never a package for a server's other uses: the admin installs those.
+- A package dropped from the list is never removed from a server.
 - Docker looks for AppArmor once per daemon, so `apparmor` installed under a running daemon changes nothing until it restarts: `docker_apparmor` restarts Docker when the kernel's `enabled` flag is Y, securityfs has apparmor, `/sbin/apparmor_parser` is there (Docker's own test; without the parser it only warns) and `docker info` lacks `name=apparmor`, once, since the restarted daemon reports it.
 - Running containers keep their profile (none) through that restart (`live-restore`, once `--server-setup` set it) until they next start.
 - Provider block volumes are mounted by hand before setup, where releases should live (for example `/srv`, a `srv.mount` replacing the provider's unit, with `DEVOPSY_ROOT=/srv`), and Docker waits for the mount through `--server-setup`'s drop-in (`RequiresMountsFor=` the release root): containers starting before it write their bind mounts to the root disk, hidden under the volume.
-- Ubuntu's `sudo` is sudo-rs, which reads `/etc/sudoers.d` too, and its kernel has AppArmor, which Docker applies to containers (`docker-default`).
+- The deploy user gets no sudo: it is root through Docker already, and passwordless sudo would make any shell of it root in one word, outside Docker's and devopsy's logs.
+- Ubuntu's kernel has AppArmor, which Docker applies to containers (`docker-default`).
 
 ## Checks
 

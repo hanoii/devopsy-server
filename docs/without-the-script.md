@@ -11,7 +11,7 @@ adopts the result.
 ```sh
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  ca-certificates curl git jq openssh-client openssl unattended-upgrades sudo
+  tar util-linux bsdutils coreutils openssh-client ca-certificates curl unattended-upgrades
 # Ubuntu only: GNU's coreutils, in place of Rust's uutils
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   --allow-remove-essential coreutils-from-gnu coreutils-from-uutils-
@@ -100,15 +100,6 @@ useradd --create-home --shell /bin/bash devopsy
 usermod -aG docker devopsy
 install -d -m 700 -o devopsy -g devopsy /home/devopsy/.ssh
 install -m 600 -o devopsy -g devopsy /root/.ssh/authorized_keys /home/devopsy/.ssh/
-
-```
-
-Optional, passwordless sudo (`DEVOPSY_SUDO=1`). The `docker` group is
-root-equivalent already; this only saves going through root's login:
-
-```sh
-echo 'devopsy ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-devopsy
-chmod 440 /etc/sudoers.d/90-devopsy
 
 ```
 

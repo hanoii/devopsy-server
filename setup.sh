@@ -17,8 +17,8 @@ STEPS=(base swap docker user upgrades cli)
 CONFIG_FILE=/etc/devopsy/server.env
 # Settings saved to $CONFIG_FILE. A new one also goes in usage and README.md.
 SETTINGS=(
-  DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SWAP DEVOPSY_AUTO_REBOOT_TIME
-  DEVOPSY_APT_PACKAGES DEVOPSY_ROOT DEVOPSY_KDUMP
+  DEVOPSY_USER DEVOPSY_SWAP DEVOPSY_AUTO_REBOOT_TIME DEVOPSY_ROOT
+  DEVOPSY_KDUMP
 )
 
 usage() {
@@ -41,10 +41,6 @@ Settings are environment variables, all optional:
                             has no swap, like 2G. Default: none.
   DEVOPSY_AUTO_REBOOT_TIME  Reboot after upgrades that need it, at this
                             time, like 04:00. Default: never.
-  DEVOPSY_APT_PACKAGES      Extra apt packages, space separated, like
-                            "htop ncdu".
-  DEVOPSY_SUDO              1 gives the deploy user passwordless sudo.
-                            Default: 0.
   DEVOPSY_KDUMP             off frees the memory kdump reserves for a crash
                             kernel, where the image has kdump-tools, from
                             the next reboot. Default: on, as the image.
@@ -85,21 +81,14 @@ load_settings() {
   fi
 
   DEVOPSY_USER=${DEVOPSY_USER:-devopsy}
-  DEVOPSY_SUDO=${DEVOPSY_SUDO:-0}
   DEVOPSY_SWAP=${DEVOPSY_SWAP:-}
   DEVOPSY_AUTO_REBOOT_TIME=${DEVOPSY_AUTO_REBOOT_TIME:-}
-  DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
   DEVOPSY_ROOT=${DEVOPSY_ROOT:-}
   DEVOPSY_KDUMP=${DEVOPSY_KDUMP:-on}
 }
 
 # Rejects bad values before they are saved, so a typo does not stick.
 validate_settings() {
-  local pkg name_re='^[a-z0-9][a-z0-9.+-]*(:[a-z0-9]+)?(=[A-Za-z0-9.+:~-]+)?$'
-  # Only package names, so the value cannot smuggle apt options in.
-  for pkg in $DEVOPSY_APT_PACKAGES; do
-    [[ $pkg =~ $name_re ]] || die "'$pkg' in DEVOPSY_APT_PACKAGES is not a package name"
-  done
   if [ -n "$DEVOPSY_ROOT" ]; then
     [[ $DEVOPSY_ROOT =~ ^/[A-Za-z0-9._/-]+$ ]] && [ "$DEVOPSY_ROOT" != / ] \
       || die "DEVOPSY_ROOT must be an absolute directory, not /: $DEVOPSY_ROOT"
@@ -160,7 +149,9 @@ preflight() {
 step_base() {
   log "base packages"
   apt-get update -q >/dev/null
-  apt_install ca-certificates curl git jq openssh-client openssl unattended-upgrades sudo
+  # devopsy's tools (tar, flock, setsid, script, mkfifo, tail), ssh for a
+  # sync across servers, and what the steps here fetch with and run.
+  apt_install tar util-linux bsdutils coreutils openssh-client ca-certificates curl unattended-upgrades
   # GNU's coreutils, which devopsy's scripts on the server expect (GNU
   # tail, mv -T), where Ubuntu may make Rust's uutils the default. The
   # two packages provide the essential coreutils and conflict, so apt
@@ -169,14 +160,6 @@ step_base() {
   # shellcheck disable=SC1091
   if (. /etc/os-release && [ "${ID:-}" = ubuntu ]); then
     apt_install --allow-remove-essential coreutils-from-gnu coreutils-from-uutils-
-  fi
-
-  # Extra packages, space separated (checked in validate_settings).
-  if [ -n "$DEVOPSY_APT_PACKAGES" ]; then
-    local extra
-    read -ra extra <<<"$DEVOPSY_APT_PACKAGES"
-    log "base: extra packages: ${extra[*]}"
-    apt_install "${extra[@]}"
   fi
 
   # Name lookups on the local network, which a server never needs:
@@ -388,12 +371,6 @@ step_user() {
   fi
 
   step_user_root
-
-  if [ "$DEVOPSY_SUDO" = 1 ]; then
-    echo "$DEVOPSY_USER ALL=(ALL) NOPASSWD:ALL" | write_file "/etc/sudoers.d/90-devopsy" 440 || true
-  else
-    rm -f /etc/sudoers.d/90-devopsy
-  fi
 
   # Root's authorized keys, so whoever manages the server can also log in as
   # the deploy user. Keys already there are kept.
