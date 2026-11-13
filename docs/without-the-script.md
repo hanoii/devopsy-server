@@ -24,12 +24,12 @@ systemctl try-restart systemd-resolved
 LLMNR is closed once `ss -ltun 'sport = :5355'` lists nothing.
 
 The kernel's arguments, applied by the next reboot. With
-`DEVOPSY_KDUMP=off`, and only where `/etc/default/grub.d/kdump-tools.cfg`
+`DEVOPSY_SERVER_KDUMP=off`, and only where `/etc/default/grub.d/kdump-tools.cfg`
 exists, also the `crashkernel=` line and kdump-tools:
 
 ```sh
 printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"' > /etc/default/grub.d/zz-kho-off.cfg
-# DEVOPSY_KDUMP=off only
+# DEVOPSY_SERVER_KDUMP=off only
 printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")' > /etc/default/grub.d/zz-no-crashkernel.cfg
 systemctl disable kdump-tools
 update-grub
@@ -114,7 +114,7 @@ systemctl enable --now unattended-upgrades
 
 ```
 
-Optional, a reboot when an upgrade needs one (`DEVOPSY_AUTO_REBOOT_TIME`),
+Optional, a reboot when an upgrade needs one (`DEVOPSY_SERVER_AUTO_REBOOT_TIME`),
 in the server's quietest hour. Without it, a kernel update waits for a
 reboot by hand:
 

@@ -199,7 +199,7 @@ test_one() {
     fail "LLMNR is still open"
   fi
   x grep -q ' kho=off' /boot/grub/grub.cfg || fail "GRUB's config lacks kho=off"
-  # kdump as the image has it: DEVOPSY_KDUMP is on by default.
+  # kdump as the image has it: DEVOPSY_SERVER_KDUMP is on by default.
   x grep -q ' crashkernel=' /boot/grub/grub.cfg || fail "the first run took kdump's crash kernel out"
   x systemctl is-enabled --quiet kdump-tools.service || fail "the first run disabled kdump-tools"
   # A restart only when it frees something: KHO's scratch in the running
@@ -237,10 +237,10 @@ test_one() {
   x sh -c 'cp /etc/apt/keyrings/docker.asc /etc/apt/keyrings/docker-old.asc && . /etc/os-release &&
     echo "deb [signed-by=/etc/apt/keyrings/docker-old.asc] https://download.docker.com/linux/$ID $VERSION_CODENAME stable" >/etc/apt/sources.list.d/docker.list'
 
-  echo "== $base: third run, DEVOPSY_KDUMP=off, another list of Docker's"
+  echo "== $base: third run, DEVOPSY_SERVER_KDUMP=off, another list of Docker's"
   x cp /etc/docker/daemon.json /tmp/daemon.before
   invocation=$(x systemctl show -p InvocationID --value docker)
-  x env DEVOPSY_KDUMP=off bash /src/setup.sh >"$out/$name.third" 2>&1 || {
+  x env DEVOPSY_SERVER_KDUMP=off bash /src/setup.sh >"$out/$name.third" 2>&1 || {
     cat "$out/$name.third"
     fail "the third run failed"
   }
@@ -250,10 +250,10 @@ test_one() {
   [ "$(x systemctl show -p InvocationID --value docker)" = "$invocation" ] || fail "setup.sh restarted Docker after --server-setup"
   x systemctl is-active --quiet docker || fail "Docker is not running after the third run"
   if x grep crashkernel= /boot/grub/grub.cfg; then
-    fail "DEVOPSY_KDUMP=off left the crash kernel in GRUB's config"
+    fail "DEVOPSY_SERVER_KDUMP=off left the crash kernel in GRUB's config"
   fi
   if x systemctl is-enabled --quiet kdump-tools.service; then
-    fail "DEVOPSY_KDUMP=off left kdump-tools enabled"
+    fail "DEVOPSY_SERVER_KDUMP=off left kdump-tools enabled"
   fi
 
   # A swap file a run left on but not in fstab (cut between the two), which
@@ -268,14 +268,14 @@ test_one() {
     chmod 755 /usr/local/sbin/swapon /usr/local/sbin/mkswap /usr/local/sbin/fallocate /usr/local/sbin/sysctl &&
     : >/swapfile && chmod 600 /swapfile && echo /swapfile >/tmp/swaps'
 
-  echo "== $base: fourth run, DEVOPSY_KDUMP=on, a swap file not in fstab"
-  x env DEVOPSY_KDUMP=on DEVOPSY_SWAP=64M bash /src/setup.sh >"$out/$name.fourth" 2>&1 || {
+  echo "== $base: fourth run, DEVOPSY_SERVER_KDUMP=on, a swap file not in fstab"
+  x env DEVOPSY_SERVER_KDUMP=on DEVOPSY_SERVER_SWAP=64M bash /src/setup.sh >"$out/$name.fourth" 2>&1 || {
     cat "$out/$name.fourth"
     fail "the fourth run failed"
   }
   rm -f "$out/$name.fourth"
-  x grep -q ' crashkernel=' /boot/grub/grub.cfg || fail "DEVOPSY_KDUMP=on did not put the crash kernel back"
-  x systemctl is-enabled --quiet kdump-tools.service || fail "DEVOPSY_KDUMP=on did not enable kdump-tools again"
+  x grep -q ' crashkernel=' /boot/grub/grub.cfg || fail "DEVOPSY_SERVER_KDUMP=on did not put the crash kernel back"
+  x systemctl is-enabled --quiet kdump-tools.service || fail "DEVOPSY_SERVER_KDUMP=on did not enable kdump-tools again"
   x grep -qx devopsy-server /run/reboot-required.pkgs || fail "no restart asked to bring kdump back"
   x grep -q ' kho=off' /boot/grub/grub.cfg || fail "the fourth run lost kho=off"
   x grep -qx '/swapfile none swap sw 0 0' /etc/fstab || fail "the fourth run left the swap file out of /etc/fstab"

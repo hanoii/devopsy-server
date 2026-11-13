@@ -17,7 +17,8 @@ STEPS=(base swap docker user upgrades cli)
 CONFIG_FILE=/etc/devopsy/server.env
 # Settings saved to $CONFIG_FILE. A new one also goes in usage and README.md.
 SETTINGS=(
-  DEVOPSY_USER DEVOPSY_SWAP DEVOPSY_AUTO_REBOOT_TIME DEVOPSY_KDUMP
+  DEVOPSY_SERVER_USER DEVOPSY_SERVER_SWAP DEVOPSY_SERVER_AUTO_REBOOT_TIME
+  DEVOPSY_SERVER_KDUMP
 )
 
 usage() {
@@ -31,26 +32,28 @@ Docker and devopsy.
 
 Settings are environment variables, all optional:
 
-  curl -fsSL ... | DEVOPSY_SWAP=2G bash
+  curl -fsSL ... | DEVOPSY_SERVER_SWAP=2G bash
 
-  DEVOPSY_USER              The deploy user. Default: devopsy.
-  DEVOPSY_SWAP              Size of a swap file to create when the server
-                            has no swap, like 2G. Default: none.
-  DEVOPSY_AUTO_REBOOT_TIME  Reboot after upgrades that need it, at this
-                            time, like 04:00. Default: never.
-  DEVOPSY_KDUMP             off frees the memory kdump reserves for a crash
-                            kernel, where the image has kdump-tools, from
-                            the next reboot. Default: on, as the image.
-  DEVOPSY_FORCE             1 runs on something other than Debian 13 or
-                            Ubuntu 26.04. Not saved.
+  DEVOPSY_SERVER_USER              The deploy user. Default: devopsy.
+  DEVOPSY_SERVER_SWAP              Size of a swap file to create when the
+                                   server has no swap, like 2G. Default:
+                                   none.
+  DEVOPSY_SERVER_AUTO_REBOOT_TIME  Reboot after upgrades that need it, at
+                                   this time, like 04:00. Default: never.
+  DEVOPSY_SERVER_KDUMP             off frees the memory kdump reserves for
+                                   a crash kernel, where the image has
+                                   kdump-tools, from the next reboot.
+                                   Default: on, as the image.
+  DEVOPSY_SERVER_FORCE             1 runs on something other than Debian 13
+                                   or Ubuntu 26.04. Not saved.
 
 They are saved to $CONFIG_FILE: a rerun without them
 reuses them, and a variable set again replaces its saved value (set empty,
-like DEVOPSY_SWAP=, it goes back to its default).
+like DEVOPSY_SERVER_SWAP=, it goes back to its default).
 EOF
   if [ -r "$CONFIG_FILE" ]; then
     printf '\nSaved on this server:\n\n'
-    grep '^DEVOPSY_' "$CONFIG_FILE" | sed 's/^/  /'
+    grep '^DEVOPSY_SERVER_' "$CONFIG_FILE" | sed 's/^/  /'
   fi
 }
 
@@ -69,7 +72,7 @@ load_settings() {
       case $line in '' | '#'*) continue ;; esac
       key=${line%%=*}
       value=${line#*=}
-      [[ $key =~ ^DEVOPSY_[A-Z0-9_]+$ ]] || continue
+      [[ $key =~ ^DEVOPSY_SERVER_[A-Z0-9_]+$ ]] || continue
       if [ -z "${!key+x}" ]; then
         # Values are saved with printf %q.
         eval "$key=$value"
@@ -77,15 +80,15 @@ load_settings() {
     done <"$CONFIG_FILE"
   fi
 
-  DEVOPSY_USER=${DEVOPSY_USER:-devopsy}
-  DEVOPSY_SWAP=${DEVOPSY_SWAP:-}
-  DEVOPSY_AUTO_REBOOT_TIME=${DEVOPSY_AUTO_REBOOT_TIME:-}
-  DEVOPSY_KDUMP=${DEVOPSY_KDUMP:-on}
+  DEVOPSY_SERVER_USER=${DEVOPSY_SERVER_USER:-devopsy}
+  DEVOPSY_SERVER_SWAP=${DEVOPSY_SERVER_SWAP:-}
+  DEVOPSY_SERVER_AUTO_REBOOT_TIME=${DEVOPSY_SERVER_AUTO_REBOOT_TIME:-}
+  DEVOPSY_SERVER_KDUMP=${DEVOPSY_SERVER_KDUMP:-on}
 }
 
 # Rejects bad values before they are saved, so a typo does not stick.
 validate_settings() {
-  case $DEVOPSY_KDUMP in on | off) ;; *) die "DEVOPSY_KDUMP is on or off, not '$DEVOPSY_KDUMP'" ;; esac
+  case $DEVOPSY_SERVER_KDUMP in on | off) ;; *) die "DEVOPSY_SERVER_KDUMP is on or off, not '$DEVOPSY_SERVER_KDUMP'" ;; esac
 }
 
 save_settings() {
@@ -116,7 +119,7 @@ write_file() {
 }
 
 as_user() {
-  runuser -u "$DEVOPSY_USER" -- env HOME="$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)" "$@"
+  runuser -u "$DEVOPSY_SERVER_USER" -- env HOME="$(getent passwd "$DEVOPSY_SERVER_USER" | cut -d: -f6)" "$@"
 }
 
 apt_install() {
@@ -132,8 +135,8 @@ preflight() {
   case ${ID:-}:${VERSION_ID:-} in
     debian:13 | ubuntu:26.04) ;;
     *)
-      [ "${DEVOPSY_FORCE:-0}" = 1 ] || die "expects Debian 13 or Ubuntu 26.04, found ${PRETTY_NAME:-unknown}. Set DEVOPSY_FORCE=1 to try anyway."
-      warn "not Debian 13 or Ubuntu 26.04 (${PRETTY_NAME:-unknown}), continuing because DEVOPSY_FORCE=1"
+      [ "${DEVOPSY_SERVER_FORCE:-0}" = 1 ] || die "expects Debian 13 or Ubuntu 26.04, found ${PRETTY_NAME:-unknown}. Set DEVOPSY_SERVER_FORCE=1 to try anyway."
+      warn "not Debian 13 or Ubuntu 26.04 (${PRETTY_NAME:-unknown}), continuing because DEVOPSY_SERVER_FORCE=1"
       ;;
   esac
 }
@@ -193,18 +196,18 @@ EOF
   # on (a release upgrade) has it from its first boot, and one without it
   # passes the word to init, which ignores it. kdump's crash kernel, where
   # kdump-tools adds crashkernel= (Vultr's Ubuntu: 320 MB), is a setting,
-  # DEVOPSY_KDUMP: off takes crashkernel= out and disables its service
+  # DEVOPSY_SERVER_KDUMP: off takes crashkernel= out and disables its service
   # (it fails without that memory), on puts both back. Drop-ins after
   # the image's (zz-), the files and lines devopsy's how-to topics
   # (kexec-handover, kdump) write, applied by the next reboot, which the
-  # restart flag asks for as a kernel update does (DEVOPSY_AUTO_REBOOT_TIME
+  # restart flag asks for as a kernel update does (DEVOPSY_SERVER_AUTO_REBOOT_TIME
   # takes it), only when it changes something: the running kernel holds
   # KHO's scratch or a crash kernel to free, or kdump comes back.
   # GRUB's config is updated while it does not say what the drop-ins do,
   # so a run cut after writing is finished by the next, and an applied
   # one updates nothing.
   local grubd=/etc/default/grub.d grubcfg=/boot/grub/grub.cfg kdump='' stale='' reboot='' mb
-  if [ -f "$grubd/kdump-tools.cfg" ]; then kdump=$DEVOPSY_KDUMP; fi
+  if [ -f "$grubd/kdump-tools.cfg" ]; then kdump=$DEVOPSY_SERVER_KDUMP; fi
   # shellcheck disable=SC2016 # grub-mkconfig expands them
   echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"' |
     write_file "$grubd/zz-kho-off.cfg" || true
@@ -235,13 +238,13 @@ EOF
       mb=$(($(cat /sys/kernel/kexec_crash_size 2>/dev/null || echo 0) / 1048576))
       if [ "$mb" -gt 0 ]; then
         reboot=1
-        log "base: no crash kernel from the next reboot (DEVOPSY_KDUMP=off): frees the $mb MB kdump reserves"
+        log "base: no crash kernel from the next reboot (DEVOPSY_SERVER_KDUMP=off): frees the $mb MB kdump reserves"
       else
-        log "base: no crash kernel from the next reboot (DEVOPSY_KDUMP=off)"
+        log "base: no crash kernel from the next reboot (DEVOPSY_SERVER_KDUMP=off)"
       fi
     elif [ "$kdump" = on ] && ! grep -q ' crashkernel=' "$grubcfg"; then
       stale=1 reboot=1
-      log "base: kdump's crash kernel back from the next reboot (DEVOPSY_KDUMP=on)"
+      log "base: kdump's crash kernel back from the next reboot (DEVOPSY_SERVER_KDUMP=on)"
     fi
   fi
   if [ -n "$stale" ] && command -v update-grub >/dev/null; then
@@ -252,17 +255,17 @@ EOF
     fi
   fi
   if [ "$kdump" = off ] && systemctl is-enabled --quiet kdump-tools.service 2>/dev/null; then
-    log "base: disabling kdump-tools (DEVOPSY_KDUMP=off)"
+    log "base: disabling kdump-tools (DEVOPSY_SERVER_KDUMP=off)"
     systemctl disable --quiet kdump-tools.service
   elif [ "$kdump" = on ] && [ "$(systemctl is-enabled kdump-tools.service 2>/dev/null)" = disabled ]; then
-    log "base: enabling kdump-tools (DEVOPSY_KDUMP=on)"
+    log "base: enabling kdump-tools (DEVOPSY_SERVER_KDUMP=on)"
     systemctl enable --quiet kdump-tools.service
   fi
 }
 
 step_swap() {
-  if [ -z "$DEVOPSY_SWAP" ]; then
-    log "swap: DEVOPSY_SWAP not set, skipping"
+  if [ -z "$DEVOPSY_SERVER_SWAP" ]; then
+    log "swap: DEVOPSY_SERVER_SWAP not set, skipping"
     return
   fi
   # The file, that it is on, and its fstab line, each checked apart, so a
@@ -273,9 +276,9 @@ step_swap() {
     log "swap: already enabled"
   else
     if [ ! -f /swapfile ]; then
-      log "swap: creating /swapfile ($DEVOPSY_SWAP)"
+      log "swap: creating /swapfile ($DEVOPSY_SERVER_SWAP)"
       rm -f /swapfile.new
-      fallocate -l "$DEVOPSY_SWAP" /swapfile.new
+      fallocate -l "$DEVOPSY_SERVER_SWAP" /swapfile.new
       chmod 600 /swapfile.new
       mkswap /swapfile.new >/dev/null
       mv /swapfile.new /swapfile
@@ -369,31 +372,31 @@ docker_security_options() {
 
 step_user() {
   local home keys tmp
-  if ! id "$DEVOPSY_USER" >/dev/null 2>&1; then
-    log "user: creating $DEVOPSY_USER"
-    useradd --create-home --shell /bin/bash "$DEVOPSY_USER"
+  if ! id "$DEVOPSY_SERVER_USER" >/dev/null 2>&1; then
+    log "user: creating $DEVOPSY_SERVER_USER"
+    useradd --create-home --shell /bin/bash "$DEVOPSY_SERVER_USER"
   fi
   # The docker group is root-equivalent: this user is trusted.
   if getent group docker >/dev/null; then
-    usermod -aG docker "$DEVOPSY_USER"
+    usermod -aG docker "$DEVOPSY_SERVER_USER"
   fi
 
   # Root's authorized keys, so whoever manages the server can also log in as
   # the deploy user. Keys already there are kept.
-  home=$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)
+  home=$(getent passwd "$DEVOPSY_SERVER_USER" | cut -d: -f6)
   keys=$home/.ssh/authorized_keys
   if [ -s /root/.ssh/authorized_keys ]; then
-    install -d -m 700 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$home/.ssh"
+    install -d -m 700 -o "$DEVOPSY_SERVER_USER" -g "$DEVOPSY_SERVER_USER" "$home/.ssh"
     tmp=$(mktemp)
     {
       if [ -f "$keys" ]; then cat "$keys"; fi
       cat /root/.ssh/authorized_keys
     } | awk 'NF && !seen[$0]++' >"$tmp"
-    install -m 600 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$tmp" "$keys"
+    install -m 600 -o "$DEVOPSY_SERVER_USER" -g "$DEVOPSY_SERVER_USER" "$tmp" "$keys"
     rm -f "$tmp"
-    log "user: copied root's authorized keys to $DEVOPSY_USER"
+    log "user: copied root's authorized keys to $DEVOPSY_SERVER_USER"
   else
-    warn "user: root has no authorized keys, add some to $keys to log in as $DEVOPSY_USER"
+    warn "user: root has no authorized keys, add some to $keys to log in as $DEVOPSY_SERVER_USER"
   fi
 }
 
@@ -403,10 +406,10 @@ step_upgrades() {
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
-  if [ -n "$DEVOPSY_AUTO_REBOOT_TIME" ]; then
+  if [ -n "$DEVOPSY_SERVER_AUTO_REBOOT_TIME" ]; then
     write_file /etc/apt/apt.conf.d/52devopsy-reboot <<EOF || true
 Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-Time "$DEVOPSY_AUTO_REBOOT_TIME";
+Unattended-Upgrade::Automatic-Reboot-Time "$DEVOPSY_SERVER_AUTO_REBOOT_TIME";
 EOF
   else
     rm -f /etc/apt/apt.conf.d/52devopsy-reboot
@@ -424,10 +427,10 @@ step_cli() {
     log "cli: upgrading devopsy"
     # Not fatal: the host is set up, and the installed devopsy keeps working.
     (cd / && as_user "$dir/devopsy" --upgrade) \
-      || warn "cli: could not upgrade devopsy: 'devopsy --upgrade' as $DEVOPSY_USER tries again"
+      || warn "cli: could not upgrade devopsy: 'devopsy --upgrade' as $DEVOPSY_SERVER_USER tries again"
   else
     log "cli: installing devopsy"
-    install -d -m 755 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir"
+    install -d -m 755 -o "$DEVOPSY_SERVER_USER" -g "$DEVOPSY_SERVER_USER" "$dir"
     (cd / && curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh" \
       | as_user DEVOPSY_INSTALL_DIR="$dir" sh >/dev/null)
   fi
@@ -461,7 +464,7 @@ main() {
   # What devopsy sets up itself (daemon.json, the socket buffers, the release
   # root and Docker's wait for it, the metadata firewall) runs from the
   # operator's machine, which asks before it changes what someone set.
-  log "next, from your machine: devopsy @$DEVOPSY_USER@<server>: --server-setup"
+  log "next, from your machine: devopsy @$DEVOPSY_SERVER_USER@<server>: --server-setup"
 }
 
 main "$@"

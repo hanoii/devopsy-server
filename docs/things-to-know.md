@@ -64,7 +64,7 @@ its `--project-users setup` hides them.
 
 The distribution's security updates are installed daily by
 unattended-upgrades. A kernel update waits for a reboot by hand unless
-`DEVOPSY_AUTO_REBOOT_TIME` is set.
+`DEVOPSY_SERVER_AUTO_REBOOT_TIME` is set.
 
 A rerun of setup or `apt upgrade` upgrades Docker. `live-restore`, which
 devopsy's `--server-setup` sets, keeps containers running meanwhile.

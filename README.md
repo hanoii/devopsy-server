@@ -15,7 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh
 ```
 
 Then run devopsy's own setup of the server from your machine, as the
-deploy user (`devopsy`, unless `DEVOPSY_USER` names another; devopsy-cli's
+deploy user (`devopsy`, unless `DEVOPSY_SERVER_USER` names another; devopsy-cli's
 [`--server-setup`](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#--server-setup)):
 
 ```sh
@@ -36,12 +36,12 @@ Settings are optional environment variables. `--help` lists them with the
 values this server has saved:
 
 ```sh
-curl -fsSL .../setup.sh | DEVOPSY_SWAP=2G bash
+curl -fsSL .../setup.sh | DEVOPSY_SERVER_SWAP=2G bash
 curl -fsSL .../setup.sh | bash -s -- --help
 ```
 
 They are saved to `/etc/devopsy/server.env`, so a rerun reuses them. Set
-one again to replace it, or empty (`DEVOPSY_SWAP=`) to go back to its
+one again to replace it, or empty (`DEVOPSY_SERVER_SWAP=`) to go back to its
 default.
 
 Rerun the same command at any time: every step is idempotent, and a rerun
@@ -55,8 +55,8 @@ On a new server, `cloud-init.yaml` can first convert its root to XFS
 
 | Step       | What it does |
 | ---------- | ------------ |
-| `base`     | Installs the tools devopsy uses (tar, util-linux, bsdutils, coreutils), openssh-client, ca-certificates, curl and unattended-upgrades, on Ubuntu `coreutils-from-gnu` (devopsy's scripts expect GNU's coreutils, which Ubuntu may replace with Rust's). Turns off systemd-resolved's LLMNR and multicast DNS, local-network name lookups a server does not need; Debian's answers LLMNR on port 5355 of every address. Sets `kho=off` on every server, freeing the memory the kernel keeps for Kexec HandOver, which a server does not use. Ubuntu 26.04's kernel turns it on and keeps up to 1.25 of 2 GB for movable pages only, which page tables, slab and socket buffers cannot use; a kernel without it ignores the word. With `DEVOPSY_KDUMP=off`, also frees the crash kernel kdump-tools reserves (Vultr's Ubuntu: 320 MB) and disables kdump-tools. These apply at the next reboot, which it asks for as a kernel update does (`/run/reboot-required`, taken by `DEVOPSY_AUTO_REBOOT_TIME`), only when the reboot frees memory or brings kdump back. |
-| `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
+| `base`     | Installs the tools devopsy uses (tar, util-linux, bsdutils, coreutils), openssh-client, ca-certificates, curl and unattended-upgrades, on Ubuntu `coreutils-from-gnu` (devopsy's scripts expect GNU's coreutils, which Ubuntu may replace with Rust's). Turns off systemd-resolved's LLMNR and multicast DNS, local-network name lookups a server does not need; Debian's answers LLMNR on port 5355 of every address. Sets `kho=off` on every server, freeing the memory the kernel keeps for Kexec HandOver, which a server does not use. Ubuntu 26.04's kernel turns it on and keeps up to 1.25 of 2 GB for movable pages only, which page tables, slab and socket buffers cannot use; a kernel without it ignores the word. With `DEVOPSY_SERVER_KDUMP=off`, also frees the crash kernel kdump-tools reserves (Vultr's Ubuntu: 320 MB) and disables kdump-tools. These apply at the next reboot, which it asks for as a kernel update does (`/run/reboot-required`, taken by `DEVOPSY_SERVER_AUTO_REBOOT_TIME`), only when the reboot frees memory or brings kdump back. |
+| `swap`     | Creates `/swapfile` of `DEVOPSY_SERVER_SWAP` if the server has no swap. |
 | `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor. Debian's and Ubuntu's kernels do, and a rerun restarts a daemon that started without it. `daemon.json` and the socket buffers are `--server-setup`'s. |
 | `user`     | Creates the deploy user in the `docker` group and copies root's SSH authorized keys to it. |
 | `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
@@ -64,13 +64,13 @@ On a new server, `cloud-init.yaml` can first convert its root to XFS
 
 ## Settings
 
-| Variable                   | Default | |
-| -------------------------- | ------- | - |
-| `DEVOPSY_USER`             | `devopsy` | The deploy user. |
-| `DEVOPSY_KDUMP`            | `on`    | `off` frees the memory kdump reserves for a crash kernel, where the image has kdump-tools (Vultr's Ubuntu: 320 MB of 2 GB), and disables it, from the next reboot; `on` puts both back. |
-| `DEVOPSY_SWAP`             |         | Swap file size, like `2G` (see ["swap"](docs/without-the-script.md#swap)). |
-| `DEVOPSY_AUTO_REBOOT_TIME` |         | Reboot after upgrades that need it, at this time, like `04:00`. |
-| `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13 or Ubuntu 26.04. Not saved. |
+| Variable                          | Default   | |
+| --------------------------------- | --------- | - |
+| `DEVOPSY_SERVER_USER`             | `devopsy` | The deploy user. |
+| `DEVOPSY_SERVER_KDUMP`            | `on`      | `off` frees the memory kdump reserves for a crash kernel, where the image has kdump-tools (Vultr's Ubuntu: 320 MB of 2 GB), and disables it, from the next reboot; `on` puts both back. |
+| `DEVOPSY_SERVER_SWAP`             |           | Swap file size, like `2G` (see ["swap"](docs/without-the-script.md#swap)). |
+| `DEVOPSY_SERVER_AUTO_REBOOT_TIME` |           | Reboot after upgrades that need it, at this time, like `04:00`. |
+| `DEVOPSY_SERVER_FORCE`            | `0`       | `1` to run on something other than Debian 13 or Ubuntu 26.04. Not saved. |
 
 Traefik's settings (ACME email, resolvers, the wildcard domain) are
 devopsy-template-traefik's; see its [Running
