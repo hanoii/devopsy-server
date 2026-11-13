@@ -1,0 +1,5 @@
+#!/bin/sh
+# sysctl's fake (test/run.sh): the swap step's file left alone, since
+# vm.swappiness is the host's; everything else to the real one.
+case "$*" in *90-devopsy-swap.conf) exit 0 ;; esac
+exec /sbin/sysctl "$@"

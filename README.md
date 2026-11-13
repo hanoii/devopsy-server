@@ -1,9 +1,9 @@
 # devopsy-server
 
-Turns a fresh Debian 13 or Ubuntu 26.04 server into a devopsy host: Docker,
-a deploy user, automatic security upgrades and the
-[devopsy CLI](https://github.com/hanoii/devopsy-cli). Everything else is
-released onto it with devopsy, starting with
+Sets up a fresh Debian 13 or Ubuntu 26.04 server as a host for
+[devopsy](https://github.com/hanoii/devopsy-cli): Docker, a deploy user,
+automatic security upgrades and devopsy itself. Projects are then released
+onto it with devopsy, starting with
 [Traefik](https://github.com/hanoii/devopsy-template-traefik).
 
 ## Usage
@@ -14,77 +14,83 @@ As root on the server:
 curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash
 ```
 
-Then run devopsy's own setup of the server from your machine, as the
-deploy user (`devopsy`, unless `DEVOPSY_USER` names another; devopsy-cli's
-[`--server-setup`](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#--server-setup)):
+It asks for the deploy user, a swap file and a time to reboot after
+upgrades that need it. Where the image has kdump, it also asks whether to
+keep kdump's memory. Each question shows a default in brackets, which
+Enter keeps.
+
+Next, from your machine, run devopsy-cli's
+[`--server-setup`](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#--server-setup)
+as the deploy user. It asks before it changes what someone else set.
+`setup.sh` prints this command at its end but does not run it:
 
 ```sh
 devopsy @devopsy@<server>: --server-setup
 ```
 
-It sets Docker's `daemon.json` (rotated logs, `live-restore`, /24 address
-pools) and the socket buffers, makes the release root and has Docker wait
-for it, and keeps containers off the cloud's metadata services, asking
-before it changes what someone else set. `setup.sh` prints this command
-at its end and does not run it.
+A server with project users needs `sudo` and `acl` installed, then
+devopsy's `--project-users setup` (devopsy-cli's [Project
+users](https://github.com/hanoii/devopsy-cli/blob/main/docs/project-users.md)).
 
-Then release Traefik onto it from a devopsy-template-traefik checkout
-(`devopsy @<server>:prod setup`; see its README's Setup section), and
-your projects after it.
-
-Settings are optional environment variables. `--help` lists them with the
-values this server has saved:
-
-```sh
-curl -fsSL .../setup.sh | DEVOPSY_SWAP=2G bash
-curl -fsSL .../setup.sh | bash -s -- --help
-```
-
-They are saved to `/etc/devopsy/server.env`, so a rerun reuses them. Set
-one again to replace it, or empty (`DEVOPSY_SWAP=`) to go back to its
-default.
-
-Rerun the same command at any time: every step is idempotent, and a rerun
-upgrades what the script installed (its apt packages, Docker and
-devopsy). It leaves no command on the server.
+Then release Traefik to the server from a devopsy-template-traefik
+checkout (`devopsy @<server>:prod setup`; see the Setup section of its
+README), and your projects after it.
 
 On a new server, `cloud-init.yaml` can first convert its root to XFS
 ([An XFS root](docs/xfs.md)).
+
+## Reruns
+
+Run the same command again to upgrade or to change a setting. Every step
+is idempotent. A rerun upgrades what the script installed (its apt
+packages, Docker and devopsy) and asks the questions again, with the
+server's saved answers as defaults. It leaves no command on the server.
+
+Without a terminal (cloud-init, CI), or with `--yes`, it asks nothing and
+uses the saved values, or the defaults where none are saved. A setting
+given as a variable is used as given, not asked, and saved like an
+answer. On a distribution other than Debian 13 or Ubuntu 26.04 it asks
+whether to go on, and without a terminal stops unless
+`DEVOPSY_SERVER_FORCE=1`. `--help` lists the settings and the values saved
+in `/etc/devopsy/server.env`:
+
+```sh
+curl -fsSL .../setup.sh | bash -s -- --yes
+curl -fsSL .../setup.sh | DEVOPSY_SERVER_SWAP=2G bash
+curl -fsSL .../setup.sh | bash -s -- --help
+```
+
+## Settings
+
+| Variable                          | Default   | |
+| --------------------------------- | --------- | - |
+| `DEVOPSY_SERVER_USER`             | `devopsy` | The deploy user, the one devopsy logs in as. Asked on the first run only, and never changed after it. |
+| `DEVOPSY_SERVER_SWAP`             | by memory | Size of `/swapfile`, like `2G` or `512M`, or `none`. A new size resizes it with the swap kept on, which takes room on `/` for a second file of the new size while it runs; a size the disk cannot hold is asked again. `none` removes the one `setup.sh` made. By default: as much as the memory up to 2.5 GB, `2G` up to 8.5 GB, none above that. A server with a swap of its own is offered none and keeps it; a size given takes over its `/swapfile`, if that is what it has. |
+| `DEVOPSY_SERVER_AUTO_REBOOT_TIME` | `never`   | Reboot after upgrades that need it, at this time, like `04:00`. |
+| `DEVOPSY_SERVER_KDUMP`            | `on`      | `off` frees the memory kdump keeps for a crash kernel and disables kdump-tools, both from the next reboot. `on` puts both back. Asked only where the image has kdump-tools. |
+| `DEVOPSY_SERVER_FORCE`            | `0`       | `1` runs on a distribution other than Debian 13 or Ubuntu 26.04 without asking. Not saved. |
+
+Traefik's settings (ACME email, resolvers, the wildcard domain) are in
+devopsy-template-traefik's [Running
+Traefik](https://github.com/hanoii/devopsy-template-traefik/blob/main/docs/running.md#settings).
 
 ## Steps
 
 | Step       | What it does |
 | ---------- | ------------ |
-| `base`     | Installs ca-certificates, curl, git, jq, openssh-client, openssl, unattended-upgrades and sudo, on Ubuntu `coreutils-from-gnu` (devopsy's scripts expect GNU's coreutils, which Ubuntu may replace with Rust's), plus `DEVOPSY_APT_PACKAGES`. Turns off systemd-resolved's LLMNR and multicast DNS, local-network name lookups a server does not need; Debian's answers LLMNR on port 5355 of every address. Hides every user's processes from the others (`/proc`'s `hidepid=invisible`), a session's command line among them, root and the `devopsy-proc` group still seeing them all. Sets `kho=off` on every server, freeing the memory the kernel keeps for Kexec HandOver, which a server does not use. Ubuntu 26.04's kernel turns it on and keeps up to 1.25 of 2 GB for movable pages only, which page tables, slab and socket buffers cannot use; a kernel without it ignores the word. With `DEVOPSY_KDUMP=off`, also frees the crash kernel kdump-tools reserves (Vultr's Ubuntu: 320 MB) and disables kdump-tools. These apply at the next reboot, which it asks for as a kernel update does (`/run/reboot-required`, taken by `DEVOPSY_AUTO_REBOOT_TIME`), only when the reboot frees memory or brings kdump back. |
-| `swap`     | Creates `/swapfile` of `DEVOPSY_SWAP` if the server has no swap. |
-| `docker`   | Docker Engine with the Buildx and Compose plugins, from Docker's apt repository, and `apparmor`, so Docker confines containers with its default profile where the kernel has AppArmor. Debian's and Ubuntu's kernels do, and a rerun restarts a daemon that started without it. `daemon.json` and the socket buffers are `--server-setup`'s. |
-| `user`     | Creates the deploy user in the `docker` and `devopsy-proc` groups, copies root's SSH authorized keys to it, and with `DEVOPSY_ROOT` writes that directory as its release root, which `--server-setup` makes or gives it ([A block volume](docs/things-to-know.md#a-block-volume)). |
-| `upgrades` | Daily unattended security upgrades, with an optional reboot time. |
-| `cli`      | Installs `devopsy` in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`; a rerun upgrades it. |
-
-## Settings
-
-| Variable                   | Default | |
-| -------------------------- | ------- | - |
-| `DEVOPSY_USER`             | `devopsy` | The deploy user. |
-| `DEVOPSY_SUDO`             | `0`     | `1` gives the deploy user passwordless sudo. |
-| `DEVOPSY_KDUMP`            | `on`    | `off` frees the memory kdump reserves for a crash kernel, where the image has kdump-tools (Vultr's Ubuntu: 320 MB of 2 GB), and disables it, from the next reboot; `on` puts both back. |
-| `DEVOPSY_APT_PACKAGES`     |         | Extra apt packages, space separated, like `htop ncdu`. Removing one from the list does not uninstall it. |
-| `DEVOPSY_SWAP`             |         | Swap file size, like `2G` (see ["swap"](docs/without-the-script.md#swap)). |
-| `DEVOPSY_AUTO_REBOOT_TIME` |         | Reboot after upgrades that need it, at this time, like `04:00`. |
-| `DEVOPSY_ROOT`             |         | Where releases live, like `/srv` on a block volume; default the deploy user's home. Written as `releases: root` at the top of the deploy user's `~/.config/devopsy/config.yaml`, under a line marking it as devopsy-server's (devopsy-cli's [Release settings](https://github.com/hanoii/devopsy-cli/blob/main/docs/config.md#release-settings)); lines after those are kept, and a file there that devopsy-server did not start is left alone. |
-| `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13 or Ubuntu 26.04. Not saved. |
-
-Traefik's settings (ACME email, resolvers, the wildcard domain) are
-devopsy-template-traefik's; see its [Running
-Traefik](https://github.com/hanoii/devopsy-template-traefik/blob/main/docs/running.md#settings).
+| `base`     | Installs the tools devopsy uses, ssh, curl and unattended-upgrades, and on Ubuntu GNU's coreutils. Turns off systemd-resolved's LLMNR and multicast DNS. Frees the memory kept for kexec, from the next reboot ([Memory for kexec](docs/things-to-know.md#memory-for-kexec)). |
+| `swap`     | Makes, resizes or removes `/swapfile`. |
+| `docker`   | Installs Docker Engine with the Buildx and Compose plugins from Docker's apt repository, and `apparmor`. |
+| `user`     | Creates the deploy user in the `docker` group, with root's SSH authorized keys. |
+| `upgrades` | Turns on daily unattended security upgrades, and the reboot after them at the time set. |
+| `cli`      | Installs devopsy in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`; a rerun upgrades it. |
 
 ## Deploying from CI
 
-Nothing here makes keys. From your machine, `devopsy --ssh-keys-generate`
-makes a pair and `devopsy @<target> --ssh-keys add ~/.ssh/devopsy-ci.pub
---restricted` authorizes it for the deploy user, without root;
-`--ssh-keys` lists and removes keys (devopsy-cli's [Keys on a
+`setup.sh` makes no keys. From your machine, `devopsy --ssh-keys-generate`
+makes a pair, and `devopsy @<target> --ssh-keys add ~/.ssh/devopsy-ci.pub
+--restricted` authorizes it for the deploy user, with no root needed.
+`--ssh-keys` also lists and removes keys (devopsy-cli's [Keys on a
 server](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#keys-on-a-server)).
 
 For CI's known hosts file, run `ssh-keyscan <server>` from your machine
@@ -98,7 +104,7 @@ for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
 
 - [An XFS root](docs/xfs.md): `cloud-init.yaml`, converting a new server's root to XFS for reflink copies.
 - [Without the script](docs/without-the-script.md): the same steps by hand, as root.
-- [Things to know](docs/things-to-know.md): what a devopsy server is protected by and what stays yours, block volumes, Docker's networks.
+- [Things to know](docs/things-to-know.md): what protects a devopsy server and what stays yours, memory for kexec, block volumes, Docker networks.
 
 ## License
 

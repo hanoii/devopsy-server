@@ -4,10 +4,12 @@
 #   curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash
 #
 # Every step is idempotent, so the same command sets up a new server and
-# brings an old one up to date: its packages, Docker and devopsy. It takes
-# no arguments but --help (`bash -s -- --help` when piped), which lists the
-# settings. Settings come from the environment, and are saved to
-# $CONFIG_FILE so a rerun reuses them. See README.md.
+# brings an old one up to date: its packages, Docker and devopsy. At a
+# terminal it asks for each setting, the saved value or the default in
+# brackets; without one, or with --yes, it asks nothing. A setting in the
+# environment is taken as it is, never asked. Settings are saved to
+# $CONFIG_FILE, so a rerun offers them again. --help lists them. See
+# README.md.
 #
 # It prepares the host only: Traefik (devopsy-template-traefik) and projects are
 # released onto it with devopsy, like any project.
@@ -15,11 +17,14 @@ set -euo pipefail
 
 STEPS=(base swap docker user upgrades cli)
 CONFIG_FILE=/etc/devopsy/server.env
-# Settings saved to $CONFIG_FILE. A new one also goes in usage and README.md.
+# Settings saved to $CONFIG_FILE. A new one also goes in check_setting,
+# default_setting, ask_settings, usage and README.md.
 SETTINGS=(
-  DEVOPSY_USER DEVOPSY_SUDO DEVOPSY_SWAP DEVOPSY_AUTO_REBOOT_TIME
-  DEVOPSY_APT_PACKAGES DEVOPSY_ROOT DEVOPSY_KDUMP
+  DEVOPSY_SERVER_USER DEVOPSY_SERVER_SWAP DEVOPSY_SERVER_AUTO_REBOOT_TIME
+  DEVOPSY_SERVER_KDUMP
 )
+# The swap step's sysctl file, which also says /swapfile is setup.sh's.
+SWAP_SYSCTL=/etc/sysctl.d/90-devopsy-swap.conf
 
 usage() {
   cat <<EOF
@@ -30,81 +35,204 @@ Docker and devopsy.
 
   curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash
 
-Settings are environment variables, all optional:
+At a terminal it asks for each setting, the saved value or the default in
+brackets, Enter keeping it. Without a terminal, or with --yes, it asks
+nothing (curl -fsSL ... | bash -s -- --yes). A setting given as a variable
+is taken as it is and not asked:
 
-  curl -fsSL ... | DEVOPSY_SWAP=2G bash
+  curl -fsSL ... | DEVOPSY_SERVER_SWAP=2G bash
 
-  DEVOPSY_USER              The deploy user. Default: devopsy.
-  DEVOPSY_ROOT              Where releases live, like /srv on a block
-                            volume. Default: the deploy user's home.
-  DEVOPSY_SWAP              Size of a swap file to create when the server
-                            has no swap, like 2G. Default: none.
-  DEVOPSY_AUTO_REBOOT_TIME  Reboot after upgrades that need it, at this
-                            time, like 04:00. Default: never.
-  DEVOPSY_APT_PACKAGES      Extra apt packages, space separated, like
-                            "htop ncdu".
-  DEVOPSY_SUDO              1 gives the deploy user passwordless sudo.
-                            Default: 0.
-  DEVOPSY_KDUMP             off frees the memory kdump reserves for a crash
-                            kernel, where the image has kdump-tools, from
-                            the next reboot. Default: on, as the image.
-  DEVOPSY_FORCE             1 runs on something other than Debian 13 or
-                            Ubuntu 26.04. Not saved.
+  DEVOPSY_SERVER_USER              The deploy user, devopsy's login, set by
+                                   the first run. Default: devopsy.
+  DEVOPSY_SERVER_SWAP              Size of /swapfile, like 2G or 512M, or
+                                   none. Default: by the memory, where the
+                                   server has no swap of its own.
+  DEVOPSY_SERVER_AUTO_REBOOT_TIME  Reboot after upgrades that need it, at
+                                   this time, like 04:00, or never.
+                                   Default: never.
+  DEVOPSY_SERVER_KDUMP             off frees the memory kdump reserves for
+                                   a crash kernel, where the image has
+                                   kdump-tools, from the next reboot.
+                                   Default: on, as the image.
+  DEVOPSY_SERVER_FORCE             1 runs on something other than Debian 13
+                                   or Ubuntu 26.04 without asking. Not
+                                   saved.
 
-They are saved to $CONFIG_FILE: a rerun without them
-reuses them, and a variable set again replaces its saved value (set empty,
-like DEVOPSY_SWAP=, it goes back to its default).
+They are saved to $CONFIG_FILE.
 EOF
-  if [ -r "$CONFIG_FILE" ]; then
-    printf '\nSaved on this server:\n\n'
-    grep '^DEVOPSY_' "$CONFIG_FILE" | sed 's/^/  /'
+  local saved
+  # Read whole, never a grep in a pipe, which fails under pipefail when it
+  # matches nothing.
+  saved=$(sed -n 's/^DEVOPSY_SERVER_/  &/p' "$CONFIG_FILE" 2>/dev/null) || true
+  if [ -n "$saved" ]; then
+    printf '\nSaved on this server:\n\n%s\n' "$saved"
   fi
 }
 
-log() { printf '\033[0;36m[devopsy-server]\033[0m %s\n' "$*"; }
-warn() { printf '\033[0;33m[devopsy-server]\033[0m %s\n' "$*" >&2; }
+# say <color> <message>: one line, the prefix in the color (36 cyan, 33
+# yellow, 31 red), without a newline: log, warn, die and ask add theirs.
+say() { printf '\033[0;%sm[devopsy-server]\033[0m %s' "$1" "$2"; }
+log() { say 36 "$*"; echo; }
+warn() { { say 33 "$*"; echo; } >&2; }
 die() {
-  printf '\033[0;31m[devopsy-server]\033[0m %s\n' "$*" >&2
+  { say 31 "$*"; echo; } >&2
   exit 1
 }
 
-# Settings: environment first, then the saved file, then the defaults.
+# Whether to ask: a terminal this run can open (/dev/tty, there under
+# curl | bash over ssh, not under cloud-init or ssh -T), and no --yes.
+yes=
+can_ask() {
+  [ -z "$yes" ] && { : </dev/tty; } 2>/dev/null
+}
+
+# ask <var> <question> [<default>]: sets the variable to the answer, read
+# from the terminal, the default when it is empty. In the main shell, never
+# a command substitution, so its die on no answer (Ctrl-D) ends the run.
+ask() {
+  # A name no caller uses: printf -v sets the innermost variable of that name.
+  local ask_reply
+  say 36 "$2${3:+ [$3]}: " >/dev/tty
+  IFS= read -r ask_reply </dev/tty || die "no answer to: $2"
+  printf -v "$1" %s "${ask_reply:-${3:-}}"
+}
+
+# Settings: the environment first, then the saved file, then the defaults.
+# from_env lists those the environment set, which are never asked; saved_*
+# hold the file's values.
+from_env=' '
 load_settings() {
+  local key line value
+  for key in "${SETTINGS[@]}"; do
+    if [ -n "${!key+x}" ]; then from_env+="$key "; fi
+  done
   if [ -f "$CONFIG_FILE" ]; then
-    local line key value
     while IFS= read -r line || [ -n "$line" ]; do
       case $line in '' | '#'*) continue ;; esac
       key=${line%%=*}
       value=${line#*=}
-      [[ $key =~ ^DEVOPSY_[A-Z0-9_]+$ ]] || continue
-      if [ -z "${!key+x}" ]; then
-        # Values are saved with printf %q.
-        eval "$key=$value"
-      fi
+      # Only the settings: another key is ignored.
+      [[ " ${SETTINGS[*]} " == *" $key "* ]] || continue
+      # Values are saved with printf %q.
+      eval "saved_$key=$value"
+      [ -n "${!key+x}" ] || eval "$key=$value"
     done <"$CONFIG_FILE"
   fi
-
-  DEVOPSY_USER=${DEVOPSY_USER:-devopsy}
-  DEVOPSY_SUDO=${DEVOPSY_SUDO:-0}
-  DEVOPSY_SWAP=${DEVOPSY_SWAP:-}
-  DEVOPSY_AUTO_REBOOT_TIME=${DEVOPSY_AUTO_REBOOT_TIME:-}
-  DEVOPSY_APT_PACKAGES=${DEVOPSY_APT_PACKAGES:-}
-  DEVOPSY_ROOT=${DEVOPSY_ROOT:-}
-  DEVOPSY_KDUMP=${DEVOPSY_KDUMP:-on}
+  for key in "${SETTINGS[@]}"; do
+    [ -n "${!key+x}" ] || printf -v "$key" %s "$(default_setting "$key")"
+    printf -v "$key" %s "$(normal_setting "$key" "${!key}")"
+  done
 }
 
-# Rejects bad values before they are saved, so a typo does not stick.
+default_setting() {
+  case $1 in
+    DEVOPSY_SERVER_USER) deploy_user || echo devopsy ;;
+    DEVOPSY_SERVER_SWAP) swap_default ;;
+    DEVOPSY_SERVER_KDUMP) echo on ;;
+  esac
+}
+
+# deploy_user: the server's deploy user once it exists, the saved one;
+# nothing (exit 1) while no user has that name.
+deploy_user() {
+  local user=${saved_DEVOPSY_SERVER_USER:-}
+  [ -n "$user" ] && id "$user" >/dev/null 2>&1 && echo "$user"
+}
+
+# none_word <key>: the word a setting takes for none, saved empty: the
+# swap's none and the reboot time's never; nothing for the others.
+none_word() {
+  case $1 in
+    DEVOPSY_SERVER_SWAP) echo none ;;
+    DEVOPSY_SERVER_AUTO_REBOOT_TIME) echo never ;;
+  esac
+}
+
+# normal_setting <key> <value>: the value as saved, its none word empty.
+normal_setting() {
+  local none
+  none=$(none_word "$1")
+  if [ -n "$none" ] && [ "$2" = "$none" ]; then return; fi
+  printf '%s\n' "$2"
+}
+
+# shown_setting <key>: the value as asked, empty as its none word.
+shown_setting() {
+  local value=${!1}
+  printf '%s\n' "${value:-$(none_word "$1")}"
+}
+
+# check_setting <key> <value>: says what is wrong with the value, else
+# nothing. The deploy user is fixed once it exists: another one would
+# start with none of the releases, which stay in the first one's home. A
+# swap size must fit on the disk.
+check_setting() {
+  local key=$1 value=$2 user
+  case $key in
+    DEVOPSY_SERVER_USER)
+      if ! [[ $value =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+        echo "$key is a user name (lowercase letters, digits, _ and -), not '$value'"
+      elif user=$(deploy_user) && [ "$value" != "$user" ]; then
+        echo "$key is $user, this server's deploy user: a server keeps its deploy user, whose home holds the releases"
+      fi
+      ;;
+    DEVOPSY_SERVER_SWAP)
+      # Six digits at most: a size bash's arithmetic cannot hold would wrap.
+      if ! [[ $value =~ ^([1-9][0-9]{0,5}[MG])?$ ]]; then
+        echo "$key is a size in M or G, like 2G or 512M, or none, not '$value'"
+      elif ! swap_fits "$value"; then
+        echo "$key $value needs $((($(swap_room "$value") + 1048575) / 1048576))M free on /, which has $(($(disk_free) / 1048576))M"
+      fi
+      ;;
+    DEVOPSY_SERVER_AUTO_REBOOT_TIME)
+      [[ $value =~ ^(([01][0-9]|2[0-3]):[0-5][0-9])?$ ]] || echo "$key is a time, like 04:00, or never, not '$value'"
+      ;;
+    DEVOPSY_SERVER_KDUMP)
+      case $value in on | off) ;; *) echo "$key is on or off, not '$value'" ;; esac
+      ;;
+  esac
+}
+
+# validate_settings [<keys>...]: rejects bad values before they are saved,
+# so a typo does not stick; every setting without keys.
 validate_settings() {
-  local pkg name_re='^[a-z0-9][a-z0-9.+-]*(:[a-z0-9]+)?(=[A-Za-z0-9.+:~-]+)?$'
-  # Only package names, so the value cannot smuggle apt options in.
-  for pkg in $DEVOPSY_APT_PACKAGES; do
-    [[ $pkg =~ $name_re ]] || die "'$pkg' in DEVOPSY_APT_PACKAGES is not a package name"
+  local key problem
+  [ $# -gt 0 ] || set -- "${SETTINGS[@]}"
+  for key in "$@"; do
+    problem=$(check_setting "$key" "${!key}")
+    [ -z "$problem" ] || die "$problem"
   done
-  if [ -n "$DEVOPSY_ROOT" ]; then
-    [[ $DEVOPSY_ROOT =~ ^/[A-Za-z0-9._/-]+$ ]] && [ "$DEVOPSY_ROOT" != / ] \
-      || die "DEVOPSY_ROOT must be an absolute directory, not /: $DEVOPSY_ROOT"
-  fi
-  case $DEVOPSY_KDUMP in on | off) ;; *) die "DEVOPSY_KDUMP is on or off, not '$DEVOPSY_KDUMP'" ;; esac
+}
+
+# The questions, for every setting the environment did not set, again on
+# every run, each with its current value as the answer Enter gives: a
+# rerun is where a setting changes. The deploy user only until it exists,
+# kdump only where the image has kdump-tools.
+ask_settings() {
+  local key question value problem
+  for key in "${SETTINGS[@]}"; do
+    [[ $from_env != *" $key "* ]] || continue
+    case $key in
+      DEVOPSY_SERVER_USER)
+        ! deploy_user >/dev/null || continue
+        question="deploy user, the one devopsy logs in as"
+        ;;
+      DEVOPSY_SERVER_SWAP) question="swap file size, like 2G or 512M, or none" ;;
+      DEVOPSY_SERVER_AUTO_REBOOT_TIME) question="reboot after upgrades that need it at, like 04:00, or never" ;;
+      DEVOPSY_SERVER_KDUMP)
+        [ -f /etc/default/grub.d/kdump-tools.cfg ] || continue
+        question="kdump: on keeps its crash kernel's memory reserved, off frees it"
+        ;;
+    esac
+    while :; do
+      ask value "$question" "$(shown_setting "$key")"
+      value=$(normal_setting "$key" "$value")
+      problem=$(check_setting "$key" "$value")
+      [ -n "$problem" ] || break
+      warn "$problem"
+    done
+    printf -v "$key" %s "$value"
+  done
 }
 
 save_settings() {
@@ -135,7 +263,7 @@ write_file() {
 }
 
 as_user() {
-  runuser -u "$DEVOPSY_USER" -- env HOME="$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)" "$@"
+  runuser -u "$DEVOPSY_SERVER_USER" -- env HOME="$(getent passwd "$DEVOPSY_SERVER_USER" | cut -d: -f6)" "$@"
 }
 
 apt_install() {
@@ -145,22 +273,44 @@ apt_install() {
 }
 
 preflight() {
+  local answer
   [ "$(id -u)" = 0 ] || die "run as root"
   # shellcheck disable=SC1091
   . /etc/os-release
   case ${ID:-}:${VERSION_ID:-} in
     debian:13 | ubuntu:26.04) ;;
     *)
-      [ "${DEVOPSY_FORCE:-0}" = 1 ] || die "expects Debian 13 or Ubuntu 26.04, found ${PRETTY_NAME:-unknown}. Set DEVOPSY_FORCE=1 to try anyway."
-      warn "not Debian 13 or Ubuntu 26.04 (${PRETTY_NAME:-unknown}), continuing because DEVOPSY_FORCE=1"
+      if [ "${DEVOPSY_SERVER_FORCE:-0}" = 1 ]; then
+        warn "not Debian 13 or Ubuntu 26.04 (${PRETTY_NAME:-unknown}), continuing because DEVOPSY_SERVER_FORCE=1"
+      elif can_ask; then
+        ask answer "this is ${PRETTY_NAME:-unknown}, not Debian 13 or Ubuntu 26.04: continue anyway? (y/N)"
+        case $answer in y | Y | yes) ;; *) die "stopped: nothing changed" ;; esac
+      else
+        die "expects Debian 13 or Ubuntu 26.04, found ${PRETTY_NAME:-unknown}. Set DEVOPSY_SERVER_FORCE=1 to try anyway."
+      fi
       ;;
   esac
 }
 
 step_base() {
   log "base packages"
+  # Another list of Docker's repository than the docker step's (a hand
+  # install's, a provider's) goes before the first update: apt refuses
+  # every source while two lists of it name different keys.
+  # A list is a file apt reads (.list, .sources) with an entry, not a
+  # comment, naming it.
+  local f
+  for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+    if [ "$f" != /etc/apt/sources.list.d/docker.sources ] &&
+      grep -qsE '^[[:space:]]*(deb(-src)?[[:space:]]|URIs:).*download\.docker\.com' "$f"; then
+      rm -f "$f"
+      log "base: removed $f, another list of Docker's repository"
+    fi
+  done
   apt-get update -q >/dev/null
-  apt_install ca-certificates curl git jq openssh-client openssl unattended-upgrades sudo
+  # devopsy's tools (tar, flock, setsid, script, mkfifo, tail), ssh for a
+  # sync across servers, and what the steps here fetch with and run.
+  apt_install tar util-linux bsdutils coreutils openssh-client ca-certificates curl unattended-upgrades
   # GNU's coreutils, which devopsy's scripts on the server expect (GNU
   # tail, mv -T), where Ubuntu may make Rust's uutils the default. The
   # two packages provide the essential coreutils and conflict, so apt
@@ -169,14 +319,6 @@ step_base() {
   # shellcheck disable=SC1091
   if (. /etc/os-release && [ "${ID:-}" = ubuntu ]); then
     apt_install --allow-remove-essential coreutils-from-gnu coreutils-from-uutils-
-  fi
-
-  # Extra packages, space separated (checked in validate_settings).
-  if [ -n "$DEVOPSY_APT_PACKAGES" ]; then
-    local extra
-    read -ra extra <<<"$DEVOPSY_APT_PACKAGES"
-    log "base: extra packages: ${extra[*]}"
-    apt_install "${extra[@]}"
   fi
 
   # Name lookups on the local network, which a server never needs:
@@ -194,12 +336,11 @@ LLMNR=no
 MulticastDNS=no
 EOF
   if systemctl is-active --quiet systemd-resolved &&
-    { [ -n "$written" ] || ss -Hltun 'sport = :5355' | grep -q .; }; then
+    { [ -n "$written" ] || [ -n "$(ss -Hltun 'sport = :5355')" ]; }; then
     log "base: restarting systemd-resolved: no LLMNR or multicast DNS"
     systemctl restart systemd-resolved
   fi
 
-  base_processes
 
   # Memory the kernel keeps for kexec, which nothing on a server uses.
   # Kexec HandOver's scratch memory, held for movable pages only by a
@@ -209,23 +350,29 @@ EOF
   # on (a release upgrade) has it from its first boot, and one without it
   # passes the word to init, which ignores it. kdump's crash kernel, where
   # kdump-tools adds crashkernel= (Vultr's Ubuntu: 320 MB), is a setting,
-  # DEVOPSY_KDUMP: off takes crashkernel= out and disables its service
-  # (it fails without that memory), on puts both back. A drop-in after
-  # the image's (zz-), applied by the next reboot, which the restart flag
-  # asks for as a kernel update does (DEVOPSY_AUTO_REBOOT_TIME takes it),
-  # only when it changes something: the running kernel holds KHO's
-  # scratch or a crash kernel to free, or kdump comes back.
-  # GRUB's config is updated while it does not say what the drop-in does,
+  # DEVOPSY_SERVER_KDUMP: off takes crashkernel= out and disables its service
+  # (it fails without that memory), on puts both back. Drop-ins after
+  # the image's (zz-), the files and lines devopsy's how-to topics
+  # (kexec-handover, kdump) write, applied by the next reboot, which the
+  # restart flag asks for as a kernel update does (DEVOPSY_SERVER_AUTO_REBOOT_TIME
+  # takes it), only when it changes something: the running kernel holds
+  # KHO's scratch or a crash kernel to free, or kdump comes back.
+  # GRUB's config is updated while it does not say what the drop-ins do,
   # so a run cut after writing is finished by the next, and an applied
   # one updates nothing.
-  local grubd=/etc/default/grub.d grubcfg=/boot/grub/grub.cfg kdump='' stale='' reboot='' mb
-  if [ -f "$grubd/kdump-tools.cfg" ]; then kdump=$DEVOPSY_KDUMP; fi
+  local grubd=/etc/default/grub.d grubcfg=/boot/grub/grub.cfg kdump='' stale='' reboot_kho='' reboot_kdump='' mb
+  if [ -f "$grubd/kdump-tools.cfg" ]; then kdump=$DEVOPSY_SERVER_KDUMP; fi
   # shellcheck disable=SC2016 # grub-mkconfig expands them
-  {
-    echo '# Written by devopsy-server (setup.sh, base): no memory for kexec.'
-    [ "$kdump" != off ] || echo 'GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")'
-    echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"'
-  } | write_file "$grubd/zz-devopsy.cfg" || true
+  echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"' |
+    write_file "$grubd/zz-kho-off.cfg" || true
+  if [ "$kdump" = off ]; then
+    # shellcheck disable=SC2016 # grub-mkconfig expands them
+    echo 'GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")' |
+      write_file "$grubd/zz-no-crashkernel.cfg" || true
+  elif [ -f "$grubd/zz-no-crashkernel.cfg" ]; then
+    rm -f "$grubd/zz-no-crashkernel.cfg"
+    log "base: removed $grubd/zz-no-crashkernel.cfg"
+  fi
   if [ -f "$grubcfg" ]; then
     if ! grep -q ' kho=off' "$grubcfg"; then
       stale=1
@@ -234,7 +381,7 @@ EOF
       mb=$(awk '/^Pages per block:/ { p = $4 } /^Number of blocks type/ { for (i = 1; i <= NF; i++) if ($i == "CMA") c = i; next }
         c && /^Node/ { n += $c } END { print int(n * p * 4 / 1024) }' /proc/pagetypeinfo 2>/dev/null)
       if [ "${mb:-0}" -gt 0 ]; then
-        reboot=1
+        reboot_kho=1
         log "base: kho=off from the next reboot: Kexec HandOver holds $mb MB for movable pages only, which page tables, slab and socket buffers cannot use, and nothing here kexecs"
       else
         log "base: kho=off from the next reboot, for a kernel that turns Kexec HandOver on (this one does not)"
@@ -244,114 +391,239 @@ EOF
       stale=1
       mb=$(($(cat /sys/kernel/kexec_crash_size 2>/dev/null || echo 0) / 1048576))
       if [ "$mb" -gt 0 ]; then
-        reboot=1
-        log "base: no crash kernel from the next reboot (DEVOPSY_KDUMP=off): frees the $mb MB kdump reserves"
+        reboot_kdump=1
+        log "base: no crash kernel from the next reboot (DEVOPSY_SERVER_KDUMP=off): frees the $mb MB kdump reserves"
       else
-        log "base: no crash kernel from the next reboot (DEVOPSY_KDUMP=off)"
+        log "base: no crash kernel from the next reboot (DEVOPSY_SERVER_KDUMP=off)"
       fi
     elif [ "$kdump" = on ] && ! grep -q ' crashkernel=' "$grubcfg"; then
-      stale=1 reboot=1
-      log "base: kdump's crash kernel back from the next reboot (DEVOPSY_KDUMP=on)"
+      # Said once update-grub put it back (below).
+      stale=1 reboot_kdump=1
     fi
   fi
   if [ -n "$stale" ] && command -v update-grub >/dev/null; then
     update-grub >/dev/null 2>&1 || die "update-grub failed"
-    if [ -n "$reboot" ]; then
+    if [ "$kdump" = on ] && [ -n "$reboot_kdump" ]; then
+      log "base: kdump's crash kernel back from the next reboot (DEVOPSY_SERVER_KDUMP=on)"
+    fi
+    if [ -n "$reboot_kho$reboot_kdump" ]; then
       echo '*** System restart required ***' >/run/reboot-required
       grep -qsx devopsy-server /run/reboot-required.pkgs || echo devopsy-server >>/run/reboot-required.pkgs
     fi
   fi
   if [ "$kdump" = off ] && systemctl is-enabled --quiet kdump-tools.service 2>/dev/null; then
-    log "base: disabling kdump-tools (DEVOPSY_KDUMP=off)"
+    log "base: disabling kdump-tools (DEVOPSY_SERVER_KDUMP=off)"
     systemctl disable --quiet kdump-tools.service
+  # Enabled only where the crash kernel's memory is kept: without it,
+  # kdump-tools fails at boot.
   elif [ "$kdump" = on ] && [ "$(systemctl is-enabled kdump-tools.service 2>/dev/null)" = disabled ]; then
-    log "base: enabling kdump-tools (DEVOPSY_KDUMP=on)"
+    log "base: enabling kdump-tools (DEVOPSY_SERVER_KDUMP=on)"
     systemctl enable --quiet kdump-tools.service
   fi
 }
 
-# Every user sees only its own processes (/proc's hidepid=invisible): a
-# process's command line, a session's whole script among them, names
-# projects, paths and arguments, which another user of the server has no
-# business reading. The devopsy-proc group still sees them all, as root
-# does: the deploy user (step_user), root-equivalent through docker
-# anyway, and polkit, which reads its callers' /proc to answer for them.
-# The kernel takes the group by number only. The fstab line, which
-# systemd-remount-fs applies at boot, names /proc's own flags, which its
-# defaults would drop, and takes the place of any other line for /proc.
-# /proc is remounted, and polkit restarted, while they do not say it yet,
-# so a run cut after writing is finished by the next, and an applied one
-# changes nothing.
-base_processes() {
-  local group=devopsy-proc marker='# Written by devopsy-server (setup.sh, base): every user sees only its own processes.'
-  local gid line others tmp pid opts written=''
-  if ! getent group "$group" >/dev/null; then
-    log "base: creating the $group group, which sees every user's processes"
-    groupadd --system "$group"
-  fi
-  gid=$(getent group "$group" | cut -d: -f3)
-  line="proc /proc proc nosuid,nodev,noexec,hidepid=invisible,gid=$gid 0 0"
-  others=$(awk -v m="$marker" -v l="$line" '$0 != m && $0 != l && $1 !~ /^#/ && $2 == "/proc"' /etc/fstab 2>/dev/null) || true
-  [ -z "$others" ] || warn "base: replacing /etc/fstab's line for /proc ($others), so other users' processes stay hidden"
-  tmp=$(mktemp)
-  {
-    if [ -f /etc/fstab ]; then awk -v m="$marker" '$0 != m && !($1 !~ /^#/ && $2 == "/proc")' /etc/fstab; fi
-    printf '%s\n%s\n' "$marker" "$line"
-  } >"$tmp"
-  write_file /etc/fstab 644 <"$tmp" || true
-  rm -f "$tmp"
-  opts=,$(findmnt -no OPTIONS /proc),
-  if [[ $opts != *,hidepid=invisible,* || $opts != *,gid=$gid,* ]]; then
-    log "base: hiding other users' processes (/proc hidepid=invisible, the $group group sees them all)"
-    mount -o remount,hidepid=invisible,gid="$gid" /proc
-  fi
-  write_file /etc/systemd/system/polkit.service.d/90-devopsy.conf <<EOF && written=1
-[Service]
-SupplementaryGroups=$group
-EOF
-  if [ -n "$written" ] || [ "$(systemctl show -p NeedDaemonReload --value polkit.service 2>/dev/null)" = yes ]; then
-    systemctl daemon-reload
-  fi
-  pid=$(systemctl show -p MainPID --value polkit.service 2>/dev/null) || pid=0
-  if [ "${pid:-0}" != 0 ] && ! awk -v g="$gid" '$1 == "Groups:" { for (i = 2; i <= NF; i++) if ($i == g) f = 1 } END { exit !f }' "/proc/$pid/status"; then
-    log "base: restarting polkit, in the $group group to see its callers"
-    systemctl restart polkit.service
+# swap_default: /swapfile's size where it is setup.sh's ($SWAP_SYSCTL),
+# none where the server has a swap of its own (a /swapfile not marked
+# setup.sh's among them), else swap_for_ram, where it fits on the disk:
+# a default nobody chose never stops a run.
+swap_default() {
+  local size
+  if [ -f "$SWAP_SYSCTL" ] && [ -f /swapfile ]; then
+    swap_size "$(stat -c %s /swapfile)"
+  elif [ ! -f /swapfile ] && [ -z "$(own_swaps)" ]; then
+    size=$(swap_for_ram "$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)")
+    if [ -n "$size" ] && swap_fits "$size"; then echo "$size"; fi
   fi
 }
 
-step_swap() {
-  if [ -z "$DEVOPSY_SWAP" ]; then
-    log "swap: DEVOPSY_SWAP not set, skipping"
-    return
+# swap_for_ram <kB>: as much swap as memory up to 2.5 GB, in steps of
+# 512 MB, then 2G up to 8.5 GB, then none: swap keeps a build on the
+# server from being killed, and a server that swaps while serving needs
+# more memory.
+swap_for_ram() {
+  local mb=$(($1 / 1024))
+  if [ "$mb" -le 2560 ]; then
+    swap_size $(((mb + 511) / 512 * 512 * 1048576))
+  elif [ "$mb" -le 8704 ]; then
+    echo 2G
   fi
-  # The file, that it is on, and its fstab line, each checked apart, so a
-  # run cut between them is finished by the next. The file is made under
-  # another name and renamed once it is a swap area. A server with a swap
-  # of its own and no /swapfile is left as it is.
-  if [ ! -f /swapfile ] && swapon --show=NAME --noheadings | grep -q .; then
-    log "swap: already enabled"
+}
+
+# swap_size <bytes>: in G when it is whole Gs, else in M.
+swap_size() {
+  if [ $(($1 % 1073741824)) = 0 ]; then
+    echo "$(($1 / 1073741824))G"
   else
-    if [ ! -f /swapfile ]; then
-      log "swap: creating /swapfile ($DEVOPSY_SWAP)"
-      rm -f /swapfile.new
-      fallocate -l "$DEVOPSY_SWAP" /swapfile.new
-      chmod 600 /swapfile.new
-      mkswap /swapfile.new >/dev/null
-      mv /swapfile.new /swapfile
-    fi
-    if ! swapon --show=NAME --noheadings | grep -qx /swapfile; then
-      log "swap: turning on /swapfile"
-      swapon /swapfile
-    fi
-    if ! grep -q '^/swapfile ' /etc/fstab; then
-      log "swap: /swapfile in /etc/fstab, on at every boot"
-      echo '/swapfile none swap sw 0 0' >>/etc/fstab
-    fi
+    echo "$(($1 / 1048576))M"
   fi
-  # Applied on every run, written or not: a first run that failed here
-  # left the file, and the next would skip it.
-  echo 'vm.swappiness = 10' | write_file /etc/sysctl.d/90-devopsy-swap.conf || true
-  sysctl -q -p /etc/sysctl.d/90-devopsy-swap.conf
+}
+
+# swap_bytes <size>: a setting's size (512M, 2G) in bytes, as fallocate
+# takes it.
+swap_bytes() {
+  local n=${1%[MG]}
+  case $1 in
+    *G) echo $((n * 1073741824)) ;;
+    *M) echo $((n * 1048576)) ;;
+  esac
+}
+
+# swap_room <size>: the free space on / that changing /swapfile to that
+# size needs now, plus 1 GB left over, or nothing (exit 1) where nothing
+# changes. A new file takes its size; a resize, the stand-in and the new
+# file at once once the old one is gone (step_swap), less a stand-in a
+# cut run left on and what step_swap removes before it makes anything (a
+# stand-in left off, the files a cut swap_make left).
+swap_room() {
+  local want old=0 need f gone=0
+  [ -n "$1" ] || return 1
+  want=$(swap_bytes "$1")
+  if [ -f /swapfile ]; then
+    old=$(stat -c %s /swapfile)
+    [ "$old" != "$want" ] || return 1
+  elif [ -n "$(own_swaps)" ]; then
+    return 1
+  fi
+  for f in /swapfile.new /swapfile.tmp.new; do
+    if [ -f "$f" ]; then gone=$((gone + $(stat -c %s "$f"))); fi
+  done
+  if [ ! -f /swapfile ]; then
+    need=$want
+  elif swap_on /swapfile.tmp; then
+    need=$((want - old))
+  else
+    if [ -f /swapfile.tmp ]; then gone=$((gone + $(stat -c %s /swapfile.tmp))); fi
+    need=$((2 * want - old))
+    [ "$need" -ge "$want" ] || need=$want
+  fi
+  need=$((need - gone))
+  [ "$need" -ge 0 ] || need=0
+  echo $((need + 1073741824))
+}
+
+# disk_free: the bytes free on /.
+disk_free() {
+  df --output=avail -B1 / | tail -n 1 | tr -d ' '
+}
+
+# swap_fits <size>: whether / has the room changing /swapfile to that size
+# needs (swap_room), true where nothing changes.
+swap_fits() {
+  local need
+  need=$(swap_room "$1") || return 0
+  [ "$need" -le "$(disk_free)" ]
+}
+
+# swaps: the files and devices the kernel swaps on, one a line. Read whole
+# by a command substitution, never piped to grep -q, whose exit at its
+# first match fails the pipe (pipefail).
+swaps() {
+  swapon --show=NAME --noheadings
+}
+
+# own_swaps: the server's swaps other than setup.sh's: its stand-in, and
+# /swapfile where the sysctl file marks it setup.sh's.
+own_swaps() {
+  local swap
+  while IFS= read -r swap; do
+    case $swap in
+      /swapfile.tmp | '') ;;
+      /swapfile) [ -f "$SWAP_SYSCTL" ] || echo "$swap" ;;
+      *) echo "$swap" ;;
+    esac
+  done <<<"$(swaps)"
+}
+
+# swap_on <file>: whether the kernel swaps on it.
+swap_on() {
+  [[ $'\n'$(swaps)$'\n' == *$'\n'"$1"$'\n'* ]]
+}
+
+# swap_make <file> <size>: a swap area of that size, made under another
+# name and renamed once it is one, never renamed while on: the kernel
+# refuses to rename a file it swaps on.
+swap_make() {
+  rm -f "$1.new"
+  # What fit is not left behind, filling the disk under the sites.
+  fallocate -l "$2" "$1.new" || {
+    rm -f "$1.new"
+    die "swap: $1 of $2 could not be made"
+  }
+  chmod 600 "$1.new"
+  mkswap "$1.new" >/dev/null
+  mv "$1.new" "$1"
+}
+
+# swap_drop <file> <what then>: turned off and removed; warned, with what
+# then, and exit 1, the file left on, where the kernel cannot take its
+# pages elsewhere.
+swap_drop() {
+  if swap_on "$1" && ! swapoff "$1"; then
+    warn "swap: $1 could not be turned off, its pages needing more memory than is free: $2, and the next run tries again"
+    return 1
+  fi
+  rm -f "$1"
+}
+
+step_swap() {
+  local want=$DEVOPSY_SERVER_SWAP
+  if [ -z "$want" ]; then
+    # None: /swapfile goes only where setup.sh made it, turned off first,
+    # then its fstab line, the file and last the sysctl file that says it
+    # was setup.sh's, so a run cut between them is finished by the next.
+    if [ -f "$SWAP_SYSCTL" ]; then
+      log "swap: removing /swapfile (DEVOPSY_SERVER_SWAP none)"
+      # /swapfile first, whose pages a stand-in still on can take; the mark
+      # stays while either is left.
+      swap_drop /swapfile "it stays" || return 0
+      swap_drop /swapfile.tmp "it stays" || return 0
+      sed -i '\#^/swapfile #d' /etc/fstab
+      rm -f /swapfile.new /swapfile.tmp.new "$SWAP_SYSCTL"
+    else
+      log "swap: none set, skipping"
+    fi
+    return 0
+  fi
+  # A server with a swap of its own and no /swapfile is left as it is.
+  if [ ! -f /swapfile ] && [ -n "$(own_swaps)" ]; then
+    log "swap: the server has a swap of its own, skipping"
+    return 0
+  fi
+  # The sysctl file first: it says /swapfile is setup.sh's, so a run cut
+  # once the file is made still removes it with none. Applied on every run,
+  # written or not, at the end, so a run failing at sysctl is finished by
+  # the next.
+  echo 'vm.swappiness = 10' | write_file "$SWAP_SYSCTL" || true
+  # A resize: a stand-in of the new size on, the old file off and replaced,
+  # the new one on, then the stand-in off and removed, so the server is
+  # never without swap. Each part is checked apart, so a run cut at any
+  # point is finished by the next; one the memory cannot take leaves the
+  # old size, said.
+  if [ -f /swapfile ] && [ "$(stat -c %s /swapfile)" != "$(swap_bytes "$want")" ]; then
+    log "swap: resizing /swapfile to $want"
+    if ! swap_on /swapfile.tmp; then
+      swap_make /swapfile.tmp "$want"
+      swapon /swapfile.tmp
+    fi
+    if swap_drop /swapfile "it keeps its size"; then
+      swap_make /swapfile "$want"
+    fi
+  elif [ ! -f /swapfile ]; then
+    log "swap: creating /swapfile ($want)"
+    swap_make /swapfile "$want"
+  fi
+  if ! swap_on /swapfile; then
+    log "swap: turning on /swapfile"
+    swapon /swapfile
+  fi
+  if [ -f /swapfile.tmp ]; then swap_drop /swapfile.tmp "it stays" || true; fi
+  # What a cut swap_make left, never on.
+  rm -f /swapfile.new /swapfile.tmp.new
+  if ! grep -q '^/swapfile ' /etc/fstab; then
+    log "swap: /swapfile in /etc/fstab, on at every boot"
+    echo '/swapfile none swap sw 0 0' >>/etc/fstab
+  fi
+  sysctl -q -p "$SWAP_SYSCTL"
 }
 
 step_docker() {
@@ -380,7 +652,7 @@ EOF
   log "docker: installing"
   apt_install apparmor docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-  # daemon.json, the socket buffers and the release root's mounts are
+  # daemon.json, the socket buffers and the release root are
   # devopsy's --server-setup's, which main names last.
   systemctl enable --now docker >/dev/null 2>&1
   docker_apparmor
@@ -428,87 +700,32 @@ docker_security_options() {
 
 step_user() {
   local home keys tmp
-  if ! id "$DEVOPSY_USER" >/dev/null 2>&1; then
-    log "user: creating $DEVOPSY_USER"
-    useradd --create-home --shell /bin/bash "$DEVOPSY_USER"
+  if ! id "$DEVOPSY_SERVER_USER" >/dev/null 2>&1; then
+    log "user: creating $DEVOPSY_SERVER_USER"
+    useradd --create-home --shell /bin/bash "$DEVOPSY_SERVER_USER"
   fi
   # The docker group is root-equivalent: this user is trusted.
   if getent group docker >/dev/null; then
-    usermod -aG docker "$DEVOPSY_USER"
-  fi
-  # Every user's processes (base_processes): hiding them from a user that
-  # is root-equivalent protects nothing.
-  usermod -aG devopsy-proc "$DEVOPSY_USER"
-
-  step_user_root
-
-  if [ "$DEVOPSY_SUDO" = 1 ]; then
-    echo "$DEVOPSY_USER ALL=(ALL) NOPASSWD:ALL" | write_file "/etc/sudoers.d/90-devopsy" 440 || true
-  else
-    rm -f /etc/sudoers.d/90-devopsy
+    usermod -aG docker "$DEVOPSY_SERVER_USER"
   fi
 
   # Root's authorized keys, so whoever manages the server can also log in as
   # the deploy user. Keys already there are kept.
-  home=$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)
+  home=$(getent passwd "$DEVOPSY_SERVER_USER" | cut -d: -f6)
   keys=$home/.ssh/authorized_keys
   if [ -s /root/.ssh/authorized_keys ]; then
-    install -d -m 700 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$home/.ssh"
+    install -d -m 700 -o "$DEVOPSY_SERVER_USER" -g "$DEVOPSY_SERVER_USER" "$home/.ssh"
     tmp=$(mktemp)
     {
       if [ -f "$keys" ]; then cat "$keys"; fi
       cat /root/.ssh/authorized_keys
     } | awk 'NF && !seen[$0]++' >"$tmp"
-    install -m 600 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$tmp" "$keys"
+    install -m 600 -o "$DEVOPSY_SERVER_USER" -g "$DEVOPSY_SERVER_USER" "$tmp" "$keys"
     rm -f "$tmp"
-    log "user: copied root's authorized keys to $DEVOPSY_USER"
+    log "user: copied root's authorized keys to $DEVOPSY_SERVER_USER"
   else
-    warn "user: root has no authorized keys, add some to $keys to log in as $DEVOPSY_USER"
+    warn "user: root has no authorized keys, add some to $keys to log in as $DEVOPSY_SERVER_USER"
   fi
-}
-
-# Where releases live: the deploy user's home, unless DEVOPSY_ROOT names
-# another directory (a block volume, say). devopsy reads it from the deploy
-# user's own config, releases: root. This step owns only its block at the
-# top of that file, the marker and the two releases: lines after it, and
-# keeps every line after the block as it is (devopsy appends its own, like
-# door:). Without DEVOPSY_ROOT it removes the block, and the file goes only
-# when nothing but blank lines is left; else the rest stays, unmarked, a
-# file no later run touches, as one it did not start. devopsy's
-# --server-setup makes the directory and gives it to the deploy user.
-step_user_root() {
-  local home config marker="# Written by devopsy-server (DEVOPSY_ROOT)." tmp
-  home=$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)
-  config=$home/.config/devopsy/config.yaml
-  if [ -f "$config" ] && ! head -n 1 "$config" | grep -qxF "$marker"; then
-    [ -z "$DEVOPSY_ROOT" ] || warn "user: $config exists and was not written by devopsy-server: set releases: root: $DEVOPSY_ROOT in it yourself"
-    return 0
-  fi
-  if [ -z "$DEVOPSY_ROOT" ] && [ ! -f "$config" ]; then
-    return 0
-  fi
-  # The block, when there is a root, then what follows the block, byte for
-  # byte.
-  tmp=$(mktemp)
-  {
-    [ -z "$DEVOPSY_ROOT" ] || printf '%s\nreleases:\n  root: %s\n' "$marker" "$DEVOPSY_ROOT"
-    if [ -f "$config" ]; then tail -n +4 "$config"; fi
-  } >"$tmp"
-  if [ -z "$DEVOPSY_ROOT" ]; then
-    if grep -q '[^[:space:]]' "$tmp"; then
-      write_file "$config" 644 <"$tmp" || true
-      chown "$DEVOPSY_USER:$DEVOPSY_USER" "$config"
-      log "user: releases live in $home again; the rest of $config stays, no longer devopsy-server's"
-    else
-      rm -f "$config"
-      log "user: releases live in $home again"
-    fi
-  else
-    install -d -m 755 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$home/.config" "$home/.config/devopsy"
-    write_file "$config" 644 <"$tmp" || true
-    chown "$DEVOPSY_USER:$DEVOPSY_USER" "$config"
-  fi
-  rm -f "$tmp"
 }
 
 step_upgrades() {
@@ -517,10 +734,10 @@ step_upgrades() {
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
-  if [ -n "$DEVOPSY_AUTO_REBOOT_TIME" ]; then
+  if [ -n "$DEVOPSY_SERVER_AUTO_REBOOT_TIME" ]; then
     write_file /etc/apt/apt.conf.d/52devopsy-reboot <<EOF || true
 Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-Time "$DEVOPSY_AUTO_REBOOT_TIME";
+Unattended-Upgrade::Automatic-Reboot-Time "$DEVOPSY_SERVER_AUTO_REBOOT_TIME";
 EOF
   else
     rm -f /etc/apt/apt.conf.d/52devopsy-reboot
@@ -538,10 +755,10 @@ step_cli() {
     log "cli: upgrading devopsy"
     # Not fatal: the host is set up, and the installed devopsy keeps working.
     (cd / && as_user "$dir/devopsy" --upgrade) \
-      || warn "cli: could not upgrade devopsy: 'devopsy --upgrade' as $DEVOPSY_USER tries again"
+      || warn "cli: could not upgrade devopsy: 'devopsy --upgrade' as $DEVOPSY_SERVER_USER tries again"
   else
     log "cli: installing devopsy"
-    install -d -m 755 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$dir"
+    install -d -m 755 -o "$DEVOPSY_SERVER_USER" -g "$DEVOPSY_SERVER_USER" "$dir"
     (cd / && curl -fsSL "https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh" \
       | as_user DEVOPSY_INSTALL_DIR="$dir" sh >/dev/null)
   fi
@@ -560,13 +777,21 @@ main() {
       usage
       exit 0
       ;;
+    -y | --yes) yes=1 ;;
     '') ;;
-    *) die "'$1': setup.sh takes no arguments but --help, settings are variables" ;;
+    *) die "'$1': setup.sh takes no arguments but --help and --yes, settings are asked or variables" ;;
   esac
+  [ $# -le 1 ] || die "'$2': setup.sh takes one argument at most"
   preflight
   load_settings
-  # Saved before running, so a failed run still remembers its settings.
+  # The environment's are checked before anything is asked, every one
+  # after: an answer is checked as it is given, a saved value or a default
+  # the questions offer to change.
+  # shellcheck disable=SC2086 # one key a word
+  [ "$from_env" = ' ' ] || validate_settings $from_env
+  if can_ask; then ask_settings; fi
   validate_settings
+  # Saved before running, so a failed run still remembers its settings.
   save_settings
   for step in "${STEPS[@]}"; do
     "step_$step"
@@ -575,7 +800,7 @@ main() {
   # What devopsy sets up itself (daemon.json, the socket buffers, the release
   # root and Docker's wait for it, the metadata firewall) runs from the
   # operator's machine, which asks before it changes what someone set.
-  log "next, from your machine: devopsy @$DEVOPSY_USER@<server>: --server-setup"
+  log "next, from your machine: devopsy @$DEVOPSY_SERVER_USER@<server>: --server-setup"
 }
 
 main "$@"

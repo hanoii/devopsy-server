@@ -1,17 +1,25 @@
 # Without the script
 
-The same steps by hand, as root, for a fresh server: to see what the
-script does, to set up another distribution, or to put it in your own
-tooling. The commands use the default settings; optional ones are marked.
-They are not idempotent, unlike the script, but running `setup.sh` later
-adopts the result.
+These are the steps `setup.sh` runs, done by hand as root on a fresh
+server: to see what it changes, to set up another distribution, or to put
+them in your own tooling. The commands use the default settings, and
+optional ones are marked. Unlike the script they are not idempotent, but
+running `setup.sh` later takes their result over. What devopsy sets up
+itself is not here: its two setups, run from your machine, are at the
+[end](#then-devopsy).
 
 ## base
 
+Any other list with an entry for Docker's repository goes first: apt
+refuses every source while two lists of it name different keys.
+
 ```sh
+for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+  if grep -qsE '^[[:space:]]*(deb(-src)?[[:space:]]|URIs:).*download\.docker\.com' "$f"; then rm -f "$f"; fi
+done
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  ca-certificates curl git jq openssh-client openssl unattended-upgrades sudo
+  tar util-linux bsdutils coreutils openssh-client ca-certificates curl unattended-upgrades
 # Ubuntu only: GNU's coreutils, in place of Rust's uutils
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   --allow-remove-essential coreutils-from-gnu coreutils-from-uutils-
@@ -23,52 +31,35 @@ systemctl try-restart systemd-resolved
 
 LLMNR is closed once `ss -ltun 'sport = :5355'` lists nothing.
 
-Every user sees only its own processes, root and the `devopsy-proc` group
-all of them. The kernel takes the group by number, and the line names
-`/proc`'s own flags, which `defaults` would drop at the next boot. polkit
-reads its callers' processes, so it goes in the group too:
+The kernel's arguments take effect at the next reboot ([Memory for
+kexec](things-to-know.md#memory-for-kexec)). With
+`DEVOPSY_SERVER_KDUMP=off`, and only where
+`/etc/default/grub.d/kdump-tools.cfg` exists, also add the `crashkernel=`
+drop-in and disable kdump-tools:
 
 ```sh
-groupadd --system devopsy-proc
-gid=$(getent group devopsy-proc | cut -d: -f3)
-echo "proc /proc proc nosuid,nodev,noexec,hidepid=invisible,gid=$gid 0 0" >> /etc/fstab
-mount -o remount,hidepid=invisible,gid=$gid /proc
-mkdir -p /etc/systemd/system/polkit.service.d
-printf '[Service]\nSupplementaryGroups=devopsy-proc\n' > /etc/systemd/system/polkit.service.d/90-devopsy.conf
-systemctl daemon-reload
-systemctl try-restart polkit
-```
-
-Another user's processes are gone from its `ps`, while `findmnt /proc`
-shows `hidepid=invisible`.
-
-The kernel's arguments, applied by the next reboot. With
-`DEVOPSY_KDUMP=off`, and only where `/etc/default/grub.d/kdump-tools.cfg`
-exists, also the `crashkernel=` line and kdump-tools:
-
-```sh
-cat > /etc/default/grub.d/zz-devopsy.cfg <<'EOF'
-GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")
-GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"
-EOF
-update-grub
+mkdir -p /etc/default/grub.d
+printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"' > /etc/default/grub.d/zz-kho-off.cfg
+# DEVOPSY_SERVER_KDUMP=off only: the next two lines
+printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")' > /etc/default/grub.d/zz-no-crashkernel.cfg
 systemctl disable kdump-tools
+update-grub
 ```
 
-After the reboot `grep CMA /proc/pagetypeinfo` shows no CMA blocks and
-`cat /sys/kernel/kexec_crash_size` says 0.
+After the reboot `grep CMA /proc/pagetypeinfo` shows no CMA blocks, and
+with kdump off `cat /sys/kernel/kexec_crash_size` says 0.
 
 ## swap
 
 Only when `swapon --show` prints nothing (many cloud images have none).
-How much:
+The size `setup.sh` offers:
 
-- Up to 2 GB of RAM: as much as the RAM.
-- 4 to 8 GB: `2G`.
-- More: optional.
+- Up to 2.5 GB of RAM: as much as the RAM.
+- Up to 8.5 GB: `2G`.
+- More: none.
 
-Build mode builds images on the server (composer, npm), which takes more
-memory than serving: swap keeps a build from being killed, but a server
+In build mode images are built on the server (composer, npm), which takes
+more memory than serving. Swap keeps a build from being killed; a server
 that swaps while serving needs more RAM.
 
 ```sh
@@ -79,8 +70,10 @@ swapon /swapfile
 echo '/swapfile none swap sw 0 0' >> /etc/fstab
 echo 'vm.swappiness = 10' > /etc/sysctl.d/90-devopsy-swap.conf
 sysctl -p /etc/sysctl.d/90-devopsy-swap.conf
-
 ```
+
+The sysctl file also marks `/swapfile` as `setup.sh`'s, so a later run
+may resize or remove it.
 
 ## docker
 
@@ -102,48 +95,14 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 systemctl enable --now docker
 ```
 
-`daemon.json` (rotated logs, `live-restore`, the address pools) and the
-socket buffers are not set here: devopsy's `--server-setup` sets them
-([cli](#cli)). Rotated logs keep containers from filling the disk, and
-`live-restore` keeps them running while Docker upgrades. For the address
-pools, see ["Docker networks"](things-to-know.md#docker-networks). The socket
-buffers, 7.5 MB, are what a Cloudflare Tunnel's connector (`cloudflared`)
-asks for its QUIC, which otherwise runs on the kernel's 208 KB maximum
-and warns; the setting is host-wide, and changes nothing without a
-tunnel.
-
 ## user
 
 ```sh
 useradd --create-home --shell /bin/bash devopsy
-usermod -aG docker,devopsy-proc devopsy
+usermod -aG docker devopsy
 install -d -m 700 -o devopsy -g devopsy /home/devopsy/.ssh
 install -m 600 -o devopsy -g devopsy /root/.ssh/authorized_keys /home/devopsy/.ssh/
-
 ```
-
-Optional, passwordless sudo (`DEVOPSY_SUDO=1`). The `docker` group is
-root-equivalent already; this only saves going through root's login:
-
-```sh
-echo 'devopsy ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-devopsy
-chmod 440 /etc/sudoers.d/90-devopsy
-
-```
-
-Optional, releases elsewhere than the home (`DEVOPSY_ROOT`), like a block
-volume mounted on `/srv` (see ["A block volume"](things-to-know.md#a-block-volume)),
-where devopsy's `--server-setup` makes or gives the directory. The
-config file:
-
-```sh
-install -d -m 755 -o devopsy -g devopsy /home/devopsy/.config /home/devopsy/.config/devopsy
-printf 'releases:\n  root: /srv\n' > /home/devopsy/.config/devopsy/config.yaml
-chown devopsy:devopsy /home/devopsy/.config/devopsy/config.yaml
-
-```
-
-`setup.sh` leaves this file alone afterwards, since it did not write it.
 
 ## upgrades
 
@@ -153,19 +112,17 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
 systemctl enable --now unattended-upgrades
-
 ```
 
-Optional, a reboot when an upgrade needs one (`DEVOPSY_AUTO_REBOOT_TIME`),
-in the server's quietest hour. Without it, a kernel update waits for a
-reboot by hand:
+Optional: a reboot when an upgrade needs one
+(`DEVOPSY_SERVER_AUTO_REBOOT_TIME`), at the server's quietest hour.
+Without it, a kernel update waits for a reboot by hand:
 
 ```sh
 cat > /etc/apt/apt.conf.d/52devopsy-reboot <<'EOF'
 Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "04:00";
 EOF
-
 ```
 
 ## cli
@@ -175,16 +132,28 @@ install -d -m 755 -o devopsy -g devopsy /usr/local/lib/devopsy
 cd / && curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh \
   | runuser -u devopsy -- env DEVOPSY_INSTALL_DIR=/usr/local/lib/devopsy sh
 ln -s /usr/local/lib/devopsy/devopsy /usr/local/bin/devopsy
-
 ```
 
 Check: `runuser -u devopsy -- docker ps` and `runuser -u devopsy --
 devopsy --version`.
 
-Then run devopsy's own part from your machine, the command `setup.sh`
-prints at its end (devopsy-cli's [`--server-setup`](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#--server-setup)):
+## Then devopsy
+
+devopsy sets up the rest itself, from your machine, as the deploy user,
+with devopsy-cli's
+[`--server-setup`](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#--server-setup)
+(Docker's `daemon.json` and the release root among what it sets). It is
+the command `setup.sh` prints at its end:
 
 ```sh
 devopsy @devopsy@<server>: --server-setup
 ```
 
+A server with [project
+users](https://github.com/hanoii/devopsy-cli/blob/main/docs/project-users.md)
+needs `sudo` and `acl` installed (`devopsy --server-setup-howto
+project-users` prints the steps), then `--project-users setup`:
+
+```sh
+devopsy @devopsy@<server>: --project-users setup
+```
