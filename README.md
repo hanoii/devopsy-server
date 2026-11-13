@@ -81,21 +81,6 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh
 | `upgrades` | Turns on daily unattended security upgrades, and the reboot after them at the time set. |
 | `cli`      | Installs devopsy in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`; a rerun upgrades it. |
 
-## Deploying from CI
-
-`setup.sh` makes no keys. From your machine, `devopsy --ssh-keys-generate`
-makes a pair, and `devopsy @<target> --ssh-keys add ~/.ssh/devopsy-ci.pub
---restricted` authorizes it for the deploy user, with no root needed.
-`--ssh-keys` also lists and removes keys (devopsy-cli's [Keys on a
-server](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#keys-on-a-server)).
-
-For CI's known hosts file, run `ssh-keyscan <server>` from your machine
-and check its fingerprints against the server's own:
-
-```sh
-for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
-```
-
 ## More
 
 - [An XFS root](docs/xfs.md): `cloud-init.yaml`, converting a new server's root to XFS for reflink copies.
