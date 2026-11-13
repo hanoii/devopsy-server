@@ -32,6 +32,9 @@ bases=("$@")
 run=devopsy-server-test-$$
 out=test/out
 mkdir -p "$out"
+# A question in a log: a value's ends in "]: ", a yes or no one in its
+# choices.
+prompts='\]: |\[(Y/n|y/N)\] '
 
 # shellcheck disable=SC2329 # run by the trap
 cleanup() {
@@ -206,10 +209,10 @@ test_one() {
     fail "the first run failed"
   }
   cat "$out/$name.first"
-  if grep -F ']: ' "$out/$name.first"; then fail "the first run asked without a terminal"; fi
+  if grep -E "$prompts" "$out/$name.first"; then fail "the first run asked without a terminal"; fi
   x grep -qx "DEVOPSY_SERVER_SWAP=''" /etc/devopsy/server.env || fail "none was not saved as no swap: $(x cat /etc/devopsy/server.env)"
   # devopsy's own part is named, not done.
-  grep -q 'next, from your machine: devopsy @devopsy@<server>: --server-setup' "$out/$name.first" ||
+  grep -qx 'devopsy-server: | $ devopsy @devopsy@<server>: --server-setup' "$out/$name.first" ||
     fail "the first run did not name --server-setup last"
   rm -f "$out/$name.first"
   for f in /etc/docker/daemon.json /etc/sysctl.d/90-devopsy-net.conf; do
@@ -247,21 +250,23 @@ test_one() {
   fi
 
   echo "== $base: second run, at a terminal, Enter to every question"
-  at_tty "$out/$name.second" '\n\n\n\n\n' 'bash /src/setup.sh' || {
+  at_tty "$out/$name.second" '\n\n\n\n\n\n' 'bash /src/setup.sh' || {
     cat "$out/$name.second"
     fail "the second run failed"
   }
   cat "$out/$name.second"
   # Whether to go on asked first, the saved values offered, the deploy
   # user not asked again.
-  grep -qF 'which every devopsy server needs: continue? (Y/n): ' "$out/$name.second" || fail "the second run did not ask whether to go on"
+  grep -qF 'which every devopsy server needs' "$out/$name.second" || fail "the second run did not say what it installs"
+  grep -qF 'devopsy-server: continue? [Y/n] ' "$out/$name.second" || fail "the second run did not ask whether to go on"
   grep -qF 'swap file size, like 2G or 512M, or none [none]: ' "$out/$name.second" || fail "the second run did not offer the saved swap"
-  grep -qF 'automatically (unattended-upgrades)? (Y/n): ' "$out/$name.second" || fail "the second run did not offer the saved upgrades"
+  grep -qF 'name lookups on the local network? [Y/n] ' "$out/$name.second" || fail "the second run did not offer the saved LLMNR"
+  grep -qF 'automatically (unattended-upgrades)? [Y/n] ' "$out/$name.second" || fail "the second run did not offer the saved upgrades"
   grep -qF 'like 04:00, or never [never]: ' "$out/$name.second" || fail "the second run did not offer the saved reboot time"
-  grep -qF 'kdump reserves for a crash kernel? (Y/n): ' "$out/$name.second" || fail "the second run did not offer the saved kdump"
+  grep -qF 'kdump reserves for a crash kernel? [Y/n] ' "$out/$name.second" || fail "the second run did not offer the saved kdump"
   if grep -F 'deploy user' "$out/$name.second"; then fail "the second run asked for the deploy user again"; fi
   # What only a change logs: every run upgrades the packages and devopsy.
-  if grep -E 'wrote |removed |restarting|updating|disabling|creating|cli: installing|linked' "$out/$name.second"; then
+  if grep -E 'wrote |removed |restarting|updating|disabling|enabling|creating|cli: installing|linked|copied|raised' "$out/$name.second"; then
     fail "the second run changed something"
   fi
   [ "$(x sh -c 'wc -l </tmp/update-grub.runs')" = 1 ] || fail "update-grub did not run exactly once"
@@ -286,7 +291,7 @@ test_one() {
     cat "$out/$name.third"
     fail "the third run failed"
   }
-  if grep -F ']: ' "$out/$name.third"; then fail "the third run asked, with --yes"; fi
+  if grep -E "$prompts" "$out/$name.third"; then fail "the third run asked, with --yes"; fi
   rm -f "$out/$name.third"
   if x test -e /etc/apt/sources.list.d/docker.list; then fail "the other list of Docker's repository is still there"; fi
   x test -e /etc/apt/sources.list.d/other.list || fail "a list that only mentions Docker's repository in a comment was removed"
@@ -307,7 +312,7 @@ test_one() {
   x sh -c 'cp /src/test/fakes/* /usr/local/sbin/ && truncate -s 64M /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && : >/tmp/swap.calls'
 
   echo "== $base: fourth run, at a terminal, DEVOPSY_SERVER_KDUMP=on and DEVOPSY_SERVER_SWAP=64M, a swap file not in fstab"
-  at_tty "$out/$name.fourth" '\n\n\n' 'env DEVOPSY_SERVER_KDUMP=on DEVOPSY_SERVER_SWAP=64M bash /src/setup.sh' || {
+  at_tty "$out/$name.fourth" '\n\n\n\n' 'env DEVOPSY_SERVER_KDUMP=on DEVOPSY_SERVER_SWAP=64M bash /src/setup.sh' || {
     cat "$out/$name.fourth"
     fail "the fourth run failed"
   }
@@ -326,6 +331,7 @@ test_one() {
   rm -f "$out/$name.second"
 
   upgrades_off_and_on
+  llmnr_on_and_off
 
   rm -f "$out/$name.step"
 
@@ -367,15 +373,15 @@ upgrades_off_and_on() {
   if grep -F 'swap file size' "$log"; then fail "no to whether to go on asked for the settings"; fi
   x cmp -s /tmp/server.env.before /etc/devopsy/server.env || fail "no to whether to go on changed the saved settings"
 
-  echo "== $base: no to upgrades skips the reboot time's question"
+  echo "== $base: no to LLMNR's question turns it on, no to upgrades skips the reboot time's question"
   # shellcheck disable=SC2016 # expanded in the container
-  x sh -c 'printf "%s\n" "source <(sed \"\\\$d\" /src/setup.sh)" "load_settings" "ask_settings" "echo upgrades=\$DEVOPSY_SERVER_UPGRADES" >/tmp/ask.sh'
-  at_tty "$log" 'n\n' 'env DEVOPSY_SERVER_SWAP=64M DEVOPSY_SERVER_KDUMP=on bash /tmp/ask.sh' || {
+  x sh -c 'printf "%s\n" "source <(sed \"\\\$d\" /src/setup.sh)" "load_settings" "ask_settings" "echo llmnr=\$DEVOPSY_SERVER_LLMNR upgrades=\$DEVOPSY_SERVER_UPGRADES" >/tmp/ask.sh'
+  at_tty "$log" 'n\nn\n' 'env DEVOPSY_SERVER_SWAP=64M DEVOPSY_SERVER_KDUMP=on bash /tmp/ask.sh' || {
     cat "$log"
     fail "the questions failed"
   }
   cat "$log"
-  grep -qF 'upgrades=off' "$log" || fail "no to upgrades did not set them off"
+  grep -qF 'llmnr=on upgrades=off' "$log" || fail "no to LLMNR's question did not leave it on, or no to upgrades did not set them off"
   if grep -F 'like 04:00' "$log"; then fail "the reboot time was asked with upgrades off"; fi
   rm -f "$log"
 
@@ -391,6 +397,37 @@ upgrades_off_and_on() {
   step_alone upgrades DEVOPSY_SERVER_UPGRADES=on DEVOPSY_SERVER_AUTO_REBOOT_TIME=
   x grep -qx 'APT::Periodic::Unattended-Upgrade "1";' /etc/apt/apt.conf.d/20auto-upgrades || fail "upgrades on did not turn unattended upgrades back on"
   x systemctl is-enabled --quiet unattended-upgrades || fail "upgrades on did not enable unattended-upgrades again"
+  rm -f "$out/$name.step"
+}
+
+# llmnr_on_and_off: DEVOPSY_SERVER_LLMNR=on takes the drop-in out and
+# restarts resolved, which on Debian answers LLMNR again, a run cut after
+# the drop-in went finished by the next, and off puts it back, an applied
+# one changing nothing; in test_one's scope (x, fail, step_alone, out,
+# name, base), the server set up with LLMNR off.
+llmnr_on_and_off() {
+  local dropin=/etc/systemd/resolved.conf.d/90-devopsy.conf
+  echo "== $base: LLMNR on takes the drop-in out, off puts it back"
+  step_alone llmnr DEVOPSY_SERVER_LLMNR=on
+  if x test -e "$dropin" || x test -e "$dropin.removed"; then fail "LLMNR on left the drop-in"; fi
+  grep -qF 'restarting systemd-resolved' "$out/$name.step" || fail "LLMNR on did not restart systemd-resolved"
+  case $base in
+    debian:*)
+      x ss -Hltun 'sport = :5355' | grep -q . || fail "LLMNR on did not answer LLMNR again"
+      ;;
+  esac
+  # Cut once the drop-in was renamed, before resolved restarted.
+  x sh -c "printf '[Resolve]\nLLMNR=no\n' >$dropin.removed"
+  step_alone llmnr DEVOPSY_SERVER_LLMNR=on
+  grep -qF 'restarting systemd-resolved' "$out/$name.step" || fail "LLMNR on did not finish a run cut before resolved restarted"
+  if x test -e "$dropin.removed"; then fail "LLMNR on left the renamed drop-in"; fi
+  step_alone llmnr DEVOPSY_SERVER_LLMNR=on
+  if grep -E 'removed |restarting' "$out/$name.step"; then fail "LLMNR on again changed something"; fi
+  step_alone llmnr DEVOPSY_SERVER_LLMNR=off
+  x test -e "$dropin" || fail "LLMNR off did not write the drop-in"
+  if x ss -Hltun 'sport = :5355' | grep .; then fail "LLMNR off left LLMNR open"; fi
+  step_alone llmnr DEVOPSY_SERVER_LLMNR=off
+  if grep -E 'wrote |restarting' "$out/$name.step"; then fail "LLMNR off again changed something"; fi
   rm -f "$out/$name.step"
 }
 
@@ -415,7 +452,7 @@ swap_resized() {
   # (test/fakes/mv).
   echo "== $base: fifth run, at a terminal, the swap file resized to 128M"
   x sh -c ': >/tmp/swap.calls'
-  at_tty "$log" '\n2g\n128M\n\n\n\n' 'bash /src/setup.sh' || {
+  at_tty "$log" '\n2g\n128M\n\n\n\n\n' 'bash /src/setup.sh' || {
     cat "$log"
     fail "the fifth run failed"
   }
@@ -464,7 +501,7 @@ swap_resized() {
   if x grep '^/swapfile ' /etc/fstab; then fail "none left /swapfile in /etc/fstab"; fi
   if x test -e /swapfile || x test -e /etc/sysctl.d/90-devopsy-swap.conf; then fail "none left /swapfile or its sysctl file"; fi
   step_alone swap DEVOPSY_SERVER_SWAP=
-  grep -q 'swap: none set, skipping' "$out/$name.step" || fail "none again did not skip"
+  grep -qF 'swap: no swap file (DEVOPSY_SERVER_SWAP=none)' "$out/$name.step" || fail "none again did not skip"
   rm -f "$out/$name.step"
 
   # The size offered for the memory, where the server has no swap.
@@ -496,10 +533,12 @@ swap_own_and_stand_in() {
   at_tty "$log" 'y\n' 'bash /tmp/preflight.sh' || true
   x umount /etc/os-release
   cat "$log"
-  grep -qF 'continue anyway? (y/N)' "$log" || fail "another distribution was not asked about at a terminal"
+  grep -qF 'not Debian 13 or Ubuntu 26.04' "$log" || fail "another distribution was not said"
+  grep -qF 'continue anyway? [y/N]' "$log" || fail "another distribution was not asked about at a terminal"
   # After the prompt, on its line or the next: the terminal echoes the
   # answer typed in before or after the prompt shows.
-  grep -qE '(^|: )(y)?went on' "$log" || fail "y to another distribution did not go on"
+  # The prompt's colors taken out first: its reset follows the "] ".
+  grep -qE '(^|\] )(y)?went on' <<<"$(sed $'s/\033\\[[0-9;]*m//g' "$log")" || fail "y to another distribution did not go on"
   rm -f "$log"
 
   # A /swapfile setup.sh did not make (no sysctl file of its) is a swap of
