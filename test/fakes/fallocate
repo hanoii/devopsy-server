@@ -1,8 +1,8 @@
 #!/bin/sh
 # fallocate's fake (test/run.sh), as setup.sh calls it (-l <size> <file>):
-# a sparse file of that size. Past the free space of the file's
-# filesystem it fails as the real one does on ext4 and XFS, the file left
-# with what fit.
+# the real one, so the free space drops as on a server, but past the free
+# space of the file's filesystem it fails as the real one does on ext4 and
+# XFS, the file left with what fit.
 echo "fallocate $*" >>/tmp/swap.calls
 size=$(numfmt --from=iec "$2")
 free=$(df --output=avail -B1 "$(dirname "$3")" | tail -n 1 | tr -d " ")
@@ -11,4 +11,4 @@ if [ "$size" -gt "$free" ]; then
   echo "fallocate: fallocate failed: No space left on device" >&2
   exit 1
 fi
-truncate -s "$2" "$3"
+exec /usr/bin/fallocate -l "$2" "$3"

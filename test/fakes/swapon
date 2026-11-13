@@ -1,7 +1,9 @@
 #!/bin/sh
 # swapon's fake (test/run.sh): the files it turned on, by inode, in
-# /tmp/swaps, so a file renamed while on is listed by its new name, as the
-# kernel lists it; the real one would act on the host's kernel.
+# /tmp/swaps, so a file renamed while off is listed by its new name, as
+# the kernel lists it; the real one would act on the host's kernel. It
+# refuses a file mkswap's fake never made a swap area of, and one that is
+# on already (EBUSY), as the real one does.
 echo "swapon $*" >>/tmp/swap.calls
 case $1 in
   --show=*)
@@ -9,5 +11,16 @@ case $1 in
       while read -r i; do find / -xdev -maxdepth 1 -inum "$i"; done </tmp/swaps
     fi
     ;;
-  *) stat -c %i "$1" >>/tmp/swaps ;;
+  *)
+    i=$(stat -c %i "$1") || exit 1
+    if ! grep -qx "$i" /tmp/mkswapped 2>/dev/null; then
+      echo "swapon: $1: read swap header failed" >&2
+      exit 1
+    fi
+    if grep -qx "$i" /tmp/swaps 2>/dev/null; then
+      echo "swapon: $1: swapon failed: Device or resource busy" >&2
+      exit 1
+    fi
+    echo "$i" >>/tmp/swaps
+    ;;
 esac

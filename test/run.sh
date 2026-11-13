@@ -305,7 +305,7 @@ test_one() {
   # the next run finishes. swapon, swapoff, mkswap, fallocate and sysctl
   # are fakes (test/fakes), their state in /tmp: the real ones would act on
   # the host's kernel.
-  x sh -c 'cp /src/test/fakes/* /usr/local/sbin/ && truncate -s 64M /swapfile && chmod 600 /swapfile && swapon /swapfile && : >/tmp/swap.calls'
+  x sh -c 'cp /src/test/fakes/* /usr/local/sbin/ && truncate -s 64M /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && : >/tmp/swap.calls'
 
   echo "== $base: fourth run, at a terminal, DEVOPSY_SERVER_KDUMP=on and DEVOPSY_SERVER_SWAP=64M, a swap file not in fstab"
   at_tty "$out/$name.fourth" '\n' 'env DEVOPSY_SERVER_KDUMP=on DEVOPSY_SERVER_SWAP=64M bash /src/setup.sh' || {
@@ -416,20 +416,18 @@ swap_resized() {
   # The stand-in's own swapoff failed too: it stays on, for the next run.
   x sh -c 'swapoff /swapfile.tmp && rm /swapfile.tmp'
   # Cut with the stand-in on and the old file gone.
-  x sh -c 'truncate -s 256M /swapfile.tmp && swapon /swapfile.tmp && swapoff /swapfile && rm /swapfile && : >/swapfile.new'
+  x sh -c 'truncate -s 256M /swapfile.tmp && mkswap /swapfile.tmp && swapon /swapfile.tmp && swapoff /swapfile && rm /swapfile && : >/swapfile.new'
   step_alone swap DEVOPSY_SERVER_SWAP=256M
   if x test -e /swapfile.tmp || x test -e /swapfile.new; then fail "the cut resize left /swapfile.tmp or /swapfile.new"; fi
   [ "$(x stat -c %s /swapfile)" = 268435456 ] || fail "the cut resize did not finish at 256M"
   [ "$(x swapon --show=NAME --noheadings)" = /swapfile ] || fail "after the cut resize, the swap on is not /swapfile alone"
-  # Bug: swap_room counts the stand-in as still to make when a cut resize
-  # (or one whose swapoff failed) left it on, so a size that fits is
-  # refused, and a run without a terminal dies on its saved value before
-  # any step. Here /swapfile is 256M and a 512M stand-in is on: what is
-  # left to make is the new 512M once the old 256M goes, 256M more, plus
-  # 1 GB; df stands in for a disk with 1400M free.
+  # The room a resize needs counts a stand-in a cut run left on as made:
+  # here /swapfile is 256M and a 512M stand-in is on, so what is left is
+  # the new 512M once the old 256M goes, 256M more, plus 1 GB; df stands in
+  # for a disk with 1400M free.
   local room
   # shellcheck disable=SC2016 # expanded in the container
-  room=$(x bash -c 'truncate -s 512M /swapfile.tmp && swapon /swapfile.tmp &&
+  room=$(x bash -c 'truncate -s 512M /swapfile.tmp && mkswap /swapfile.tmp && swapon /swapfile.tmp &&
     source <(sed "\$d" /src/setup.sh) && df() { printf "Avail\n%s\n" $((1400 * 1048576)); } &&
     check_setting DEVOPSY_SERVER_SWAP 512M; swapoff /swapfile.tmp && rm /swapfile.tmp' 2>&1)
   [ -z "$room" ] || fail "a resize with its stand-in on already was refused for room it has: $room"
@@ -447,24 +445,26 @@ swap_resized() {
     fail "the swap offered for the memory is not 512M, 1G, 2G, 2G, none"
 
   # The deploy user is fixed once it exists, never a saved name no user has
-  # yet (a first run stopped before its user step).
+  # (a first run stopped before its user step): with none, any name goes;
+  # with devopsy's directory owned by one, that one, whatever was saved.
   # shellcheck disable=SC2016 # expanded in the container
-  [ "$(x bash -c 'source <(sed "\$d" /src/setup.sh) && saved_DEVOPSY_SERVER_USER=deply && check_setting DEVOPSY_SERVER_USER deploy && echo ok')" = ok ] ||
-    fail "a saved deploy user that does not exist refused another"
+  [ "$(x bash -c 'source <(sed "\$d" /src/setup.sh) && stat() { return 1; } && saved_DEVOPSY_SERVER_USER=deply && check_setting DEVOPSY_SERVER_USER deploy && echo ok')" = ok ] ||
+    fail "a saved deploy user that does not exist, on a server with none, refused another"
+  # shellcheck disable=SC2016 # expanded in the container
+  [ "$(x bash -c 'source <(sed "\$d" /src/setup.sh) && saved_DEVOPSY_SERVER_USER=deply && deploy_user')" = devopsy ] ||
+    fail "a saved deploy user that does not exist did not fall back to the owner of devopsy's directory"
   # shellcheck disable=SC2016 # expanded in the container
   x bash -c 'source <(sed "\$d" /src/setup.sh) && saved_DEVOPSY_SERVER_USER=devopsy && check_setting DEVOPSY_SERVER_USER deploy' | grep -q 'this server.s deploy user' ||
     fail "another deploy user than the one that exists was not refused"
 }
 
-# swap_own_and_stand_in: review round 2's failing tests, each naming its
-# bug; in test_one's scope (x, fail, at_tty, step_alone, out, name), after
-# swap_resized, which leaves no swap and no sysctl file.
+# swap_own_and_stand_in: another distribution asked about, a swap the
+# server has of its own, none with a stand-in left on, a size no disk
+# holds; in test_one's scope (x, fail, at_tty, step_alone, out, name),
+# after swap_resized, which leaves no swap and no sysctl file.
 swap_own_and_stand_in() {
   local log=$out/$name.sixth
-  # Bug: preflight still calls ask as before it set a variable (the
-  # question its first argument, in a command substitution), so at a
-  # terminal on another distribution the run dies on "$2: unbound variable"
-  # and never asks whether to go on.
+  # Another distribution at a terminal is asked about, and y goes on.
   echo "== $base: another distribution at a terminal is asked about"
   # shellcheck disable=SC2016 # expanded in the container
   x sh -c 'sed "s/^VERSION_ID=.*/VERSION_ID=1/" /etc/os-release >/tmp/os-release.other && mount --bind /tmp/os-release.other /etc/os-release &&
@@ -473,32 +473,39 @@ swap_own_and_stand_in() {
   x umount /etc/os-release
   cat "$log"
   grep -qF 'continue anyway? (y/N)' "$log" || fail "another distribution was not asked about at a terminal"
-  grep -q '^went on' "$log" || fail "y to another distribution did not go on"
+  # After the prompt, on its line: the answer is echoed before it.
+  grep -q ': went on' "$log" || fail "y to another distribution did not go on"
   rm -f "$log"
 
-  # Bug: a /swapfile setup.sh did not make (no sysctl file of its) counts
-  # as no swap of the server's own (own_swaps leaves it out whoever made
-  # it), so the size by the memory is the default and a run without a
-  # terminal resizes the server's own swap file, unasked. 2 GB of memory
-  # here, the host's being more than swap_for_ram gives a swap for.
+  # A /swapfile setup.sh did not make (no sysctl file of its) is a swap of
+  # the server's own: none is offered, so a run without a terminal never
+  # resizes it. 2 GB of memory here, the host's being more than
+  # swap_for_ram gives a swap for.
   echo "== $base: a /swapfile of the server's own is offered none"
   # shellcheck disable=SC2016 # expanded in the container
   x sh -c 'sed "s/^MemTotal:.*/MemTotal: 2000000 kB/" /proc/meminfo >/tmp/meminfo && mount --bind /tmp/meminfo /proc/meminfo &&
-    truncate -s 64M /swapfile && chmod 600 /swapfile && swapon /swapfile'
+    truncate -s 64M /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile'
   local offered
   # shellcheck disable=SC2016 # expanded in the container
   offered=$(x bash -c 'source <(sed "\$d" /src/setup.sh) && swap_default')
-  x sh -c 'umount /proc/meminfo && swapoff /swapfile && rm /swapfile'
+  x sh -c 'swapoff /swapfile && rm /swapfile'
   [ -z "$offered" ] || fail "a server with a /swapfile of its own is offered $offered, not none: a run without a terminal would resize it"
+  # The size by the memory (2G here) only where it fits on the disk, df
+  # standing in for one with 1 GB free: a default nobody chose never stops
+  # a first run without a terminal.
+  # shellcheck disable=SC2016 # expanded in the container
+  offered=$(x bash -c 'source <(sed "\$d" /src/setup.sh) && df() { printf "Avail\n%s\n" $((1024 * 1048576)); } && swap_default')
+  # shellcheck disable=SC2016 # expanded in the container
+  [ "$(x bash -c 'source <(sed "\$d" /src/setup.sh) && swap_default')" = 2G ] || fail "a server of 2 GB with room on its disk is not offered 2G"
+  x umount /proc/meminfo
+  [ -z "$offered" ] || fail "a swap of $offered, which the disk cannot hold, is offered by default"
 
-  # Bug: none with the stand-in of a cut resize still on: where its
-  # swapoff fails and /swapfile's does not (the pages of /swapfile go to
-  # the stand-in), the sysctl file goes all the same, so the next run
-  # skips and the stand-in stays on for good, though the warning says the
-  # next run tries again.
+  # None with the stand-in of a cut resize still on, its swapoff failing
+  # once: the sysctl file stays while either file is left, so the next run
+  # finishes.
   echo "== $base: none, the stand-in's swapoff failing once"
   x sh -c 'echo "vm.swappiness = 10" >/etc/sysctl.d/90-devopsy-swap.conf &&
-    truncate -s 64M /swapfile /swapfile.tmp && swapon /swapfile && swapon /swapfile.tmp && echo /swapfile.tmp >/tmp/swapoff.fail'
+    truncate -s 64M /swapfile /swapfile.tmp && mkswap /swapfile && mkswap /swapfile.tmp && swapon /swapfile && swapon /swapfile.tmp && echo /swapfile.tmp >/tmp/swapoff.fail'
   step_alone swap DEVOPSY_SERVER_SWAP=
   x rm /tmp/swapoff.fail
   step_alone swap DEVOPSY_SERVER_SWAP=
@@ -506,9 +513,8 @@ swap_own_and_stand_in() {
   [ -z "$(x swapon --show=NAME --noheadings)" ] || fail "none left the stand-in on, the run after its failed swapoff skipping: $(x swapon --show=NAME --noheadings)"
   if x test -e /swapfile.tmp; then fail "none left /swapfile.tmp"; fi
 
-  # Bug: a size past 2^63 bytes wraps in swap_bytes (17179869184G is 0),
-  # so it passes the check of the room on /, is saved, and fails at
-  # fallocate on every run after.
+  # A size bash's arithmetic cannot hold (17179869184G wraps to 0) is
+  # refused, never saved to fail at fallocate on every run.
   # shellcheck disable=SC2016 # expanded in the container
   [ -n "$(x bash -c 'source <(sed "\$d" /src/setup.sh) && check_setting DEVOPSY_SERVER_SWAP 17179869184G')" ] ||
     fail "a swap of 17179869184G, which no disk holds, was not refused"

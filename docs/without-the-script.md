@@ -10,11 +10,13 @@ itself is not here: its two setups, run from your machine, are at the
 
 ## base
 
-Any older list of Docker's repository goes first: apt refuses every source
-while two lists of it name different keys.
+Any older list with an entry for Docker's repository goes first: apt
+refuses every source while two lists of it name different keys.
 
 ```sh
-for f in /etc/apt/sources.list.d/*; do if grep -qs download.docker.com "$f"; then rm -f "$f"; fi; done
+for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+  if grep -qsE '^[[:space:]]*(deb(-src)?[[:space:]]|URIs:).*download\.docker\.com' "$f"; then rm -f "$f"; fi
+done
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   tar util-linux bsdutils coreutils openssh-client ca-certificates curl unattended-upgrades

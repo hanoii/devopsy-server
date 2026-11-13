@@ -1,3 +1,5 @@
 #!/bin/sh
-# mkswap's fake (test/run.sh).
+# mkswap's fake (test/run.sh): the file's inode noted in /tmp/mkswapped,
+# the swap area swapon's fake requires.
 echo "mkswap $*" >>/tmp/swap.calls
+stat -c %i "$1" >>/tmp/mkswapped

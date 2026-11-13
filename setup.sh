@@ -90,10 +90,11 @@ can_ask() {
 # from the terminal, the default when it is empty. In the main shell, never
 # a command substitution, so its die on no answer (Ctrl-D) ends the run.
 ask() {
-  local answer
+  # A name no caller uses: printf -v sets the innermost variable of that name.
+  local ask_reply
   say 36 "$2${3:+ [$3]}: " >/dev/tty
-  IFS= read -r answer </dev/tty || die "no answer to: $2"
-  printf -v "$1" %s "${answer:-${3:-}}"
+  IFS= read -r ask_reply </dev/tty || die "no answer to: $2"
+  printf -v "$1" %s "${ask_reply:-${3:-}}"
 }
 
 # Settings: the environment first, then the saved file, then the defaults.
@@ -131,16 +132,18 @@ default_setting() {
   esac
 }
 
-# deploy_user: the server's deploy user once it exists, the saved one, else
-# the owner of devopsy's directory (step_cli), which a server set up by
-# any version has, else nothing (exit 1).
+# deploy_user: the server's deploy user once it exists: the saved one,
+# else the owner of devopsy's directory (step_cli), which a server set up
+# by any version has; nothing (exit 1) while neither is a user.
 deploy_user() {
-  local user=${saved_DEVOPSY_SERVER_USER:-}
-  if [ -z "$user" ] && [ -d /usr/local/lib/devopsy ]; then
-    user=$(stat -c %U /usr/local/lib/devopsy)
-    [ "$user" != root ] || user=
-  fi
-  [ -n "$user" ] && id "$user" >/dev/null 2>&1 && echo "$user"
+  local user
+  for user in "${saved_DEVOPSY_SERVER_USER:-}" "$(stat -c %U /usr/local/lib/devopsy 2>/dev/null)"; do
+    if [ -n "$user" ] && [ "$user" != root ] && [ "$user" != UNKNOWN ] && id "$user" >/dev/null 2>&1; then
+      echo "$user"
+      return 0
+    fi
+  done
+  return 1
 }
 
 # none_word <key>: the word a setting takes for none, saved empty: the
@@ -171,7 +174,7 @@ shown_setting() {
 # start with none of the releases, which stay in the first one's home. A
 # swap size must fit on the disk.
 check_setting() {
-  local key=$1 value=$2 user need free
+  local key=$1 value=$2 user
   case $key in
     DEVOPSY_SERVER_USER)
       if ! [[ $value =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
@@ -181,10 +184,11 @@ check_setting() {
       fi
       ;;
     DEVOPSY_SERVER_SWAP)
-      if ! [[ $value =~ ^([1-9][0-9]*[MG])?$ ]]; then
+      # Six digits at most: a size bash's arithmetic cannot hold would wrap.
+      if ! [[ $value =~ ^([1-9][0-9]{0,5}[MG])?$ ]]; then
         echo "$key is a size in M or G, like 2G or 512M, or none, not '$value'"
-      elif need=$(swap_room "$value") && free=$(df --output=avail -B1 / | tail -n 1) && [ "$need" -gt "$free" ]; then
-        echo "$key $value needs $(human_size "$need") free on /, which has $(human_size "$free")"
+      elif ! swap_fits "$value"; then
+        echo "$key $value needs $((($(swap_room "$value") + 1048575) / 1048576))M free on /, which has $(($(disk_free) / 1048576))M"
       fi
       ;;
     DEVOPSY_SERVER_AUTO_REBOOT_TIME)
@@ -286,7 +290,7 @@ preflight() {
       if [ "${DEVOPSY_SERVER_FORCE:-0}" = 1 ]; then
         warn "not Debian 13 or Ubuntu 26.04 (${PRETTY_NAME:-unknown}), continuing because DEVOPSY_SERVER_FORCE=1"
       elif can_ask; then
-        answer=$(ask "this is ${PRETTY_NAME:-unknown}, not Debian 13 or Ubuntu 26.04: continue anyway? (y/N)")
+        ask answer "this is ${PRETTY_NAME:-unknown}, not Debian 13 or Ubuntu 26.04: continue anyway? (y/N)"
         case $answer in y | Y | yes) ;; *) die "stopped: nothing changed" ;; esac
       else
         die "expects Debian 13 or Ubuntu 26.04, found ${PRETTY_NAME:-unknown}. Set DEVOPSY_SERVER_FORCE=1 to try anyway."
@@ -438,12 +442,16 @@ EOF
 }
 
 # swap_default: /swapfile's size where it is setup.sh's ($SWAP_SYSCTL),
-# none where the server has a swap of its own, else swap_for_ram.
+# none where the server has a swap of its own (a /swapfile not marked
+# setup.sh's among them), else swap_for_ram, where it fits on the disk:
+# a default nobody chose never stops a run.
 swap_default() {
+  local size
   if [ -f "$SWAP_SYSCTL" ] && [ -f /swapfile ]; then
     swap_size "$(stat -c %s /swapfile)"
-  elif [ -z "$(own_swaps)" ]; then
-    swap_for_ram "$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)"
+  elif [ ! -f /swapfile ] && [ -z "$(own_swaps)" ]; then
+    size=$(swap_for_ram "$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)")
+    if [ -n "$size" ] && swap_fits "$size"; then echo "$size"; fi
   fi
 }
 
@@ -469,15 +477,6 @@ swap_size() {
   fi
 }
 
-# human_size <bytes>: in whole G, rounded down, else in M.
-human_size() {
-  if [ "$1" -ge 1073741824 ]; then
-    echo "$(($1 / 1073741824))G"
-  else
-    echo "$(($1 / 1048576))M"
-  fi
-}
-
 # swap_bytes <size>: a setting's size (512M, 2G) in bytes, as fallocate
 # takes it.
 swap_bytes() {
@@ -490,10 +489,12 @@ swap_bytes() {
 
 # swap_room <size>: the free space on / that changing /swapfile to that
 # size needs now, plus 1 GB left over, or nothing (exit 1) where nothing
-# changes: a new file takes its size, a resize the stand-in and the new
-# file at once once the old one is gone (step_swap).
+# changes. A new file takes its size; a resize, the stand-in and the new
+# file at once once the old one is gone (step_swap), less a stand-in a
+# cut run left on and what step_swap removes before it makes anything (a
+# stand-in left off, the files a cut swap_make left).
 swap_room() {
-  local want old=0 need
+  local want old=0 need f gone=0
   [ -n "$1" ] || return 1
   want=$(swap_bytes "$1")
   if [ -f /swapfile ]; then
@@ -502,9 +503,34 @@ swap_room() {
   elif [ -n "$(own_swaps)" ]; then
     return 1
   fi
-  need=$want
-  if [ "$old" -gt 0 ] && [ $((2 * want - old)) -gt "$need" ]; then need=$((2 * want - old)); fi
+  for f in /swapfile.new /swapfile.tmp.new; do
+    if [ -f "$f" ]; then gone=$((gone + $(stat -c %s "$f"))); fi
+  done
+  if [ ! -f /swapfile ]; then
+    need=$want
+  elif swap_on /swapfile.tmp; then
+    need=$((want - old))
+  else
+    if [ -f /swapfile.tmp ]; then gone=$((gone + $(stat -c %s /swapfile.tmp))); fi
+    need=$((2 * want - old))
+    [ "$need" -ge "$want" ] || need=$want
+  fi
+  need=$((need - gone))
+  [ "$need" -ge 0 ] || need=0
   echo $((need + 1073741824))
+}
+
+# disk_free: the bytes free on /.
+disk_free() {
+  df --output=avail -B1 / | tail -n 1 | tr -d ' '
+}
+
+# swap_fits <size>: whether / has the room changing /swapfile to that size
+# needs (swap_room), true where nothing changes.
+swap_fits() {
+  local need
+  need=$(swap_room "$1") || return 0
+  [ "$need" -le "$(disk_free)" ]
 }
 
 # swaps: the files and devices the kernel swaps on, one a line. Read whole
@@ -514,11 +540,16 @@ swaps() {
   swapon --show=NAME --noheadings
 }
 
-# own_swaps: the server's swaps other than setup.sh's two files.
+# own_swaps: the server's swaps other than setup.sh's: its stand-in, and
+# /swapfile where the sysctl file marks it setup.sh's.
 own_swaps() {
   local swap
   while IFS= read -r swap; do
-    case $swap in /swapfile | /swapfile.tmp | '') ;; *) echo "$swap" ;; esac
+    case $swap in
+      /swapfile.tmp | '') ;;
+      /swapfile) [ -f "$SWAP_SYSCTL" ] || echo "$swap" ;;
+      *) echo "$swap" ;;
+    esac
   done <<<"$(swaps)"
 }
 
@@ -542,10 +573,14 @@ swap_make() {
   mv "$1.new" "$1"
 }
 
-# swap_drop <file>: turned off and removed; exit 1, with the file left on,
-# where the kernel cannot take its pages elsewhere.
+# swap_drop <file> <what then>: turned off and removed; warned, with what
+# then, and exit 1, the file left on, where the kernel cannot take its
+# pages elsewhere.
 swap_drop() {
-  if swap_on "$1"; then swapoff "$1" || return 1; fi
+  if swap_on "$1" && ! swapoff "$1"; then
+    warn "swap: $1 could not be turned off, its pages needing more memory than is free: $2, and the next run tries again"
+    return 1
+  fi
   rm -f "$1"
 }
 
@@ -557,11 +592,10 @@ step_swap() {
     # was setup.sh's, so a run cut between them is finished by the next.
     if [ -f "$SWAP_SYSCTL" ]; then
       log "swap: removing /swapfile (DEVOPSY_SERVER_SWAP none)"
-      swap_drop /swapfile.tmp || warn "swap: /swapfile.tmp could not be turned off, its pages needing more memory than is free: the next run tries again"
-      if ! swap_drop /swapfile; then
-        warn "swap: /swapfile could not be turned off, its pages needing more memory than is free: it stays, and the next run tries again"
-        return 0
-      fi
+      # /swapfile first, whose pages a stand-in still on can take; the mark
+      # stays while either is left.
+      swap_drop /swapfile "it stays" || return 0
+      swap_drop /swapfile.tmp "it stays" || return 0
       sed -i '\#^/swapfile #d' /etc/fstab
       rm -f /swapfile.new /swapfile.tmp.new "$SWAP_SYSCTL"
     else
@@ -590,10 +624,8 @@ step_swap() {
       swap_make /swapfile.tmp "$want"
       swapon /swapfile.tmp
     fi
-    if swap_drop /swapfile; then
+    if swap_drop /swapfile "it keeps its size"; then
       swap_make /swapfile "$want"
-    else
-      warn "swap: /swapfile could not be turned off, its pages needing more memory than is free: it keeps its size, and the next run tries again"
     fi
   elif [ ! -f /swapfile ]; then
     log "swap: creating /swapfile ($want)"
@@ -603,9 +635,7 @@ step_swap() {
     log "swap: turning on /swapfile"
     swapon /swapfile
   fi
-  if [ -f /swapfile.tmp ] && ! swap_drop /swapfile.tmp; then
-    warn "swap: /swapfile.tmp could not be turned off, its pages needing more memory than is free: the next run tries again"
-  fi
+  if [ -f /swapfile.tmp ]; then swap_drop /swapfile.tmp "it stays" || true; fi
   # What a cut swap_make left, never on.
   rm -f /swapfile.new /swapfile.tmp.new
   if ! grep -q '^/swapfile ' /etc/fstab; then
