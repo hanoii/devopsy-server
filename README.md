@@ -8,23 +8,25 @@ onto it with devopsy, starting with
 
 ## A new server
 
-A new server can start on XFS: create it with
-[`cloud-init.yaml`](cloud-init.yaml) as its user data, and on its first
-boots it converts the root from ext4 to XFS, in about three minutes and
-two reboots of its own, before `setup.sh` runs. It is tried on
-DigitalOcean droplets and Vultr instances, with their Debian 13 and
-Ubuntu 26.04 images; [An XFS root](docs/xfs.md) has the steps for each.
+If you're creating a new server, it can start on XFS. Give it
+[`cloud-init.yaml`](cloud-init.yaml) as user data and it converts the
+root from ext4 to XFS on its first boots. That takes about three
+minutes and two reboots, all on its own, and then it's ready for
+`setup.sh`. It's been tested on DigitalOcean droplets and Vultr
+instances, with their Debian 13 and Ubuntu 26.04 images. [An XFS
+root](docs/xfs.md) has the steps for each.
 
 > [!TIP]
-> XFS copies files with reflinks, so a copy of data on the server (an
-> environment's, with its database) takes seconds at any size. The
-> conversion is only for a new server, before anything is on its disk.
+> XFS copies files with reflinks, so copying data on the server (say,
+> an environment and its database) takes seconds, however big it is.
+> The conversion only works on a new server, before anything is on the
+> disk.
 
 ## Usage
 
 > [!NOTE]
-> To set up a server by hand instead, [Without the
-> script](docs/without-the-script.md) has the same steps, run as root.
+> Rather do it by hand? [Without the script](docs/without-the-script.md)
+> has the same steps, to run as root.
 
 As root on the server:
 
@@ -32,42 +34,44 @@ As root on the server:
 curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash
 ```
 
-It asks for the deploy user, a swap file and a time to reboot after
-upgrades that need it. Where the image has kdump, it also asks whether to
-keep kdump's memory. Each question shows a default in brackets, which
-Enter keeps.
+It asks for the deploy user, the swap size and when to reboot after
+upgrades that need it. If the image has kdump, it also asks whether to
+keep the memory kdump reserves. Each question shows its default in
+brackets; press Enter to keep it.
 
-Next, from your machine, run devopsy-cli's
+Then, from your own machine, run devopsy's
 [`--server-setup`](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#--server-setup)
-as the deploy user. It asks before it changes what someone else set.
-`setup.sh` prints this command at its end but does not run it:
+as the deploy user. It asks before changing anything someone else set.
+`setup.sh` prints this command when it finishes, but doesn't run it for
+you:
 
 ```sh
 devopsy @devopsy@<server>: --server-setup
 ```
 
-A server with project users needs `sudo` and `acl` installed, then
-devopsy's `--project-users setup` (devopsy-cli's [Project
+If the server will have project users, install `sudo` and `acl`, then
+run devopsy's `--project-users setup` (see [Project
 users](https://github.com/hanoii/devopsy-cli/blob/main/docs/project-users.md)).
 
-Then release Traefik to the server from a devopsy-template-traefik
-checkout (`devopsy @<server>:prod setup`; see the Setup section of its
-README), and your projects after it.
+After that, release Traefik from a checkout of devopsy-template-traefik
+(`devopsy @<server>:prod setup`, explained in the Setup section of its
+README), then your own projects.
 
 ## Reruns
 
-Run the same command again to upgrade or to change a setting. Every step
-is idempotent. A rerun upgrades what the script installed (its apt
-packages, Docker and devopsy) and asks the questions again, with the
-server's saved answers as defaults. It leaves no command on the server.
+To upgrade or change a setting, run the same command again. Every step
+is safe to repeat. A rerun upgrades what the script installed (its apt
+packages, Docker and devopsy) and asks the questions again, with your
+saved answers as the defaults. The script doesn't leave a command of its
+own on the server.
 
-Without a terminal (cloud-init, CI), or with `--yes`, it asks nothing and
-uses the saved values, or the defaults where none are saved. A setting
-given as a variable is used as given, not asked, and saved like an
-answer. On a distribution other than Debian 13 or Ubuntu 26.04 it asks
-whether to go on, and without a terminal stops unless
-`DEVOPSY_SERVER_FORCE=1`. `--help` lists the settings and the values saved
-in `/etc/devopsy/server.env`:
+With `--yes`, or without a terminal (cloud-init, CI), it asks nothing:
+it uses the saved values, or the defaults if nothing is saved yet. A
+setting passed as a variable is used as is, without asking, and saved
+like an answer. On a distribution other than Debian 13 or Ubuntu 26.04
+it asks whether to carry on; without a terminal it stops, unless
+`DEVOPSY_SERVER_FORCE=1` is set. `--help` lists the settings and the
+values saved in `/etc/devopsy/server.env`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash -s -- --yes
@@ -79,28 +83,28 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh
 
 | Variable                          | Default   | |
 | --------------------------------- | --------- | - |
-| `DEVOPSY_SERVER_USER`             | `devopsy` | The deploy user, the one devopsy logs in as. Asked on the first run only, and never changed after it. |
-| `DEVOPSY_SERVER_SWAP`             | by memory | Size of `/swapfile`, like `2G` or `512M`, or `none`. A new size resizes it with the swap kept on, which takes room on `/` for a second file of the new size while it runs; a size the disk cannot hold is asked again. `none` removes the one `setup.sh` made. By default: as much as the memory up to 2.5 GB, `2G` up to 8.5 GB, none above that. A server with a swap of its own is offered none and keeps it; a size given takes over its `/swapfile`, if that is what it has. |
-| `DEVOPSY_SERVER_AUTO_REBOOT_TIME` | `never`   | Reboot after upgrades that need it, at this time, like `04:00`. |
-| `DEVOPSY_SERVER_KDUMP`            | `on`      | `off` frees the memory kdump keeps for a crash kernel and disables kdump-tools, both from the next reboot. `on` puts both back. Asked only where the image has kdump-tools. |
+| `DEVOPSY_SERVER_USER`             | `devopsy` | The deploy user devopsy logs in as. Only asked on the first run, and never changed after that. |
+| `DEVOPSY_SERVER_SWAP`             | by memory | Size of `/swapfile`, like `2G` or `512M`, or `none`. A new size resizes it without turning swap off, which needs room on `/` for a second file of the new size while it runs; if the disk can't fit it, you're asked again. `none` removes the swap file `setup.sh` made. The default goes by memory: the same as the memory up to 2.5 GB, `2G` up to 8.5 GB, and none above that. If the server already has a swap of its own, the default is none and it's left alone; giving a size takes over its `/swapfile`, if that's what it uses. |
+| `DEVOPSY_SERVER_AUTO_REBOOT_TIME` | `never`   | When to reboot after upgrades that need it, like `04:00`. |
+| `DEVOPSY_SERVER_KDUMP`            | `on`      | `off` frees the memory kdump reserves for a crash kernel and turns off kdump-tools, from the next reboot. `on` brings both back. Only asked if the image has kdump-tools. |
 | `DEVOPSY_SERVER_FORCE`            | `0`       | `1` runs on a distribution other than Debian 13 or Ubuntu 26.04 without asking. Not saved. |
 
 ## Steps
 
 | Step       | What it does |
 | ---------- | ------------ |
-| `base`     | Installs the tools devopsy uses, ssh, curl and unattended-upgrades, and on Ubuntu GNU's coreutils. Turns off systemd-resolved's LLMNR and multicast DNS. Frees the memory kept for kexec, from the next reboot ([Memory for kexec](docs/things-to-know.md#memory-for-kexec)). |
-| `swap`     | Makes, resizes or removes `/swapfile`. |
+| `base`     | Installs the tools devopsy uses, ssh, curl and unattended-upgrades, plus GNU coreutils on Ubuntu. Turns off LLMNR and multicast DNS in systemd-resolved. Frees the memory reserved for kexec, from the next reboot ([Memory for kexec](docs/things-to-know.md#memory-for-kexec)). |
+| `swap`     | Creates, resizes or removes `/swapfile`. |
 | `docker`   | Installs Docker Engine with the Buildx and Compose plugins from Docker's apt repository, and `apparmor`. |
-| `user`     | Creates the deploy user in the `docker` group, with root's SSH authorized keys. |
-| `upgrades` | Turns on daily unattended security upgrades, and the reboot after them at the time set. |
+| `user`     | Creates the deploy user in the `docker` group and gives it root's SSH authorized keys. |
+| `upgrades` | Turns on daily unattended security upgrades, and the reboot after them at the time you set. |
 | `cli`      | Installs devopsy in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`; a rerun upgrades it. |
 
 ## More
 
-- [An XFS root](docs/xfs.md): `cloud-init.yaml`, converting a new server's root to XFS for reflink copies.
+- [An XFS root](docs/xfs.md): converting a new server's root to XFS with `cloud-init.yaml`, for reflink copies.
 - [Without the script](docs/without-the-script.md): the same steps by hand, as root.
-- [Things to know](docs/things-to-know.md): what protects a devopsy server and what stays yours, memory for kexec, block volumes, Docker networks.
+- [Things to know](docs/things-to-know.md): what protects a devopsy server and what's left to you, memory for kexec, block volumes, Docker networks.
 
 ## License
 
