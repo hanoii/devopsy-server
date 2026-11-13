@@ -83,7 +83,7 @@ devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for [devopsy](https://g
 - `cloud-init.yaml`: the XFS conversion, its scripts in `write_files` (`internals/xfs.md`).
 - `test/run.sh` and `test/Dockerfile` run `setup.sh` in containers, with fakes of the swap tools in `test/fakes` (Checks).
 - `.github/workflows/` holds `lint.yml` and `setup.yml`.
-- `README.md` and `docs/` are the user-facing behavior, kept in step with every change: the README's steps and settings tables, `docs/xfs.md`, `docs/without-the-script.md` (each step by hand, so a change to a `step_*` function changes its commands there) and `docs/things-to-know.md`.
+- `README.md` and `docs/` are the user-facing behavior, kept in step with every change: the README's steps and settings tables, `docs/xfs.md`, `docs/without-the-script.md` (each step by hand, so a change to a `step_*` function changes its commands there, never what devopsy sets up, which its end names as devopsy's two setups) and `docs/things-to-know.md`.
 
 ## Rules
 

@@ -74,6 +74,24 @@ it from your machine, without root (`--upgrade vX.Y.Z` for a given
 release). A rerun of setup upgrades it to the latest. Commands refuse a
 server whose devopsy is too old for yours, and say so.
 
+## Memory for kexec
+
+The `base` step puts `kho=off` on the kernel's command line on every
+server, freeing the memory the kernel keeps for Kexec HandOver, which a
+server does not use. Ubuntu 26.04's kernel turns it on and keeps up to
+1.25 of 2 GB for movable pages only, which page tables, slab and socket
+buffers cannot use; a kernel without it ignores the word.
+
+With `DEVOPSY_SERVER_KDUMP=off`, where the image has kdump-tools, it also
+frees the memory kept for a crash kernel (Vultr's Ubuntu: 320 MB) and
+disables kdump-tools; `on` puts both back.
+
+Both apply at the next reboot. `setup.sh` never reboots: it asks for one
+as a kernel update does (`/run/reboot-required`), only when the reboot
+frees memory or brings kdump back, and unattended-upgrades takes it at
+the reboot time set. Its files are the ones devopsy-cli's
+`--server-setup-howto kexec-handover` and `kdump` write.
+
 ## Containers
 
 Every service in the devopsy templates runs without privilege:
@@ -105,16 +123,12 @@ clients means separate servers.
 An environment's data and secrets stay on the server until you copy them
 off.
 
-`devopsy @<target> --snapshot` takes an environment's data, code and the
-images it ran as one consistent copy. Keep snapshots on another disk with
-the server's `snapshots: root`, in the deploy user's
-`~/.config/devopsy/config.yaml`, or send one off the server
-(`--snapshots export <id> | ...`).
-
-A snapshot carries the environment's `shared/.env`, where its secrets
-live. Without that file, a database password a release generated no
-longer matches the database. Without snapshots, back up `shared/.env`,
-`shared/mnt` (databases as dumps) and `.devopsy-data-images` beside them.
+`devopsy @<target> --snapshot` takes an environment's data, code, secrets
+and the images it ran as one consistent copy, which can be kept on another
+disk or sent off the server (devopsy-cli's
+[Snapshots](https://github.com/hanoii/devopsy-cli/blob/main/docs/snapshots.md));
+without snapshots, see what to back up in its
+[Data](https://github.com/hanoii/devopsy-cli/blob/main/docs/data.md).
 
 Your provider's disk backups restore the whole server as on any other,
 including the XFS root.
@@ -143,11 +157,11 @@ releases](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#enviro
 Providers mount volumes elsewhere (DigitalOcean: `/mnt/<volume>`).
 Replace the provider's unit with one that mounts it where releases should
 live, like `/srv`, and make it the release root (devopsy-cli's [Release
-settings](https://github.com/hanoii/devopsy-cli/blob/main/docs/config.md#release-settings)). devopsy's `--server-setup`
-then gives the directory to the deploy user, as it does one root owns and
+settings](https://github.com/hanoii/devopsy-cli/blob/main/docs/config.md#release-settings)).
+devopsy's `--server-setup` then gives the directory to the deploy user, as it does one root owns and
 that is empty (a fresh volume's `lost+found` aside), and refuses one root
-owns that holds files, or another user's. It adds a `docker.service.d` drop-in
-with `RequiresMountsFor=` set to the release root, so Docker never starts
+owns that holds files, or another user's. It adds a `docker.service.d`
+drop-in with `RequiresMountsFor=` set to the release root, so Docker never starts
 without the volume: containers starting before it would write their bind
 mounts to the root disk, hidden under the volume. An fstab
 `x-systemd.before=docker.service` is not enough: it only orders the two,

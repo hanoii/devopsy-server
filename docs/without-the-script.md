@@ -1,10 +1,11 @@
 # Without the script
 
-The same steps by hand, as root, for a fresh server: to see what the
-script does, to set up another distribution, or to put it in your own
+What `setup.sh` does, by hand, as root, for a fresh server: to see what
+it changes, to set up another distribution, or to put it in your own
 tooling. The commands use the default settings; optional ones are marked.
 They are not idempotent, unlike the script, but running `setup.sh` later
-adopts the result.
+adopts the result. What devopsy sets up itself is not here: its two
+setups, run from your machine, [end](#then-devopsy) the page.
 
 ## base
 
@@ -23,9 +24,10 @@ systemctl try-restart systemd-resolved
 
 LLMNR is closed once `ss -ltun 'sport = :5355'` lists nothing.
 
-The kernel's arguments, applied by the next reboot. With
-`DEVOPSY_SERVER_KDUMP=off`, and only where `/etc/default/grub.d/kdump-tools.cfg`
-exists, also the `crashkernel=` line and kdump-tools:
+The kernel's arguments, applied by the next reboot ([Memory for
+kexec](things-to-know.md#memory-for-kexec)). With `DEVOPSY_SERVER_KDUMP=off`,
+and only where `/etc/default/grub.d/kdump-tools.cfg` exists, also the
+`crashkernel=` drop-in and kdump-tools:
 
 ```sh
 printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"' > /etc/default/grub.d/zz-kho-off.cfg
@@ -41,11 +43,11 @@ After the reboot `grep CMA /proc/pagetypeinfo` shows no CMA blocks and
 ## swap
 
 Only when `swapon --show` prints nothing (many cloud images have none).
-How much:
+How much, as `setup.sh` offers it:
 
-- Up to 2 GB of RAM: as much as the RAM.
-- 4 to 8 GB: `2G`.
-- More: optional.
+- Up to 2.5 GB of RAM: as much as the RAM.
+- Up to 8.5 GB: `2G`.
+- More: none.
 
 Build mode builds images on the server (composer, npm), which takes more
 memory than serving: swap keeps a build from being killed, but a server
@@ -59,8 +61,10 @@ swapon /swapfile
 echo '/swapfile none swap sw 0 0' >> /etc/fstab
 echo 'vm.swappiness = 10' > /etc/sysctl.d/90-devopsy-swap.conf
 sysctl -p /etc/sysctl.d/90-devopsy-swap.conf
-
 ```
+
+The sysctl file also tells `setup.sh` that `/swapfile` is its own, to
+resize or remove.
 
 ## docker
 
@@ -83,15 +87,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 systemctl enable --now docker
 ```
 
-`daemon.json` (rotated logs, `live-restore`, the address pools) and the
-socket buffers are not set here: devopsy's `--server-setup` sets them
-([cli](#cli)). Rotated logs keep containers from filling the disk, and
-`live-restore` keeps them running while Docker upgrades. For the address
-pools, see ["Docker networks"](things-to-know.md#docker-networks). The socket
-buffers, 7.5 MB, are what a Cloudflare Tunnel's connector (`cloudflared`)
-asks for its QUIC, which otherwise runs on the kernel's 208 KB maximum
-and warns; the setting is host-wide, and changes nothing without a
-tunnel.
+The first line removes any older list of Docker's repository: apt refuses
+every source while two lists of it name different keys.
 
 ## user
 
@@ -100,7 +97,6 @@ useradd --create-home --shell /bin/bash devopsy
 usermod -aG docker devopsy
 install -d -m 700 -o devopsy -g devopsy /home/devopsy/.ssh
 install -m 600 -o devopsy -g devopsy /root/.ssh/authorized_keys /home/devopsy/.ssh/
-
 ```
 
 ## upgrades
@@ -111,7 +107,6 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
 systemctl enable --now unattended-upgrades
-
 ```
 
 Optional, a reboot when an upgrade needs one (`DEVOPSY_SERVER_AUTO_REBOOT_TIME`),
@@ -123,7 +118,6 @@ cat > /etc/apt/apt.conf.d/52devopsy-reboot <<'EOF'
 Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "04:00";
 EOF
-
 ```
 
 ## cli
@@ -133,16 +127,27 @@ install -d -m 755 -o devopsy -g devopsy /usr/local/lib/devopsy
 cd / && curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh \
   | runuser -u devopsy -- env DEVOPSY_INSTALL_DIR=/usr/local/lib/devopsy sh
 ln -s /usr/local/lib/devopsy/devopsy /usr/local/bin/devopsy
-
 ```
 
 Check: `runuser -u devopsy -- docker ps` and `runuser -u devopsy --
 devopsy --version`.
 
-Then run devopsy's own part from your machine, the command `setup.sh`
-prints at its end (devopsy-cli's [`--server-setup`](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#--server-setup)):
+## Then devopsy
+
+devopsy sets up the rest itself, from your machine, as the deploy user:
+Docker's `daemon.json`, the release root and the rest of devopsy-cli's
+[`--server-setup`](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#--server-setup),
+the command `setup.sh` prints at its end:
 
 ```sh
 devopsy @devopsy@<server>: --server-setup
+```
+
+A server with [project
+users](https://github.com/hanoii/devopsy-cli/blob/main/docs/project-users.md)
+then needs its `--project-users setup` too:
+
+```sh
+devopsy @devopsy@<server>: --project-users setup
 ```
 
