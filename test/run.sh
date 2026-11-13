@@ -258,7 +258,7 @@ test_one() {
   grep -qF 'swap file size, like 2G or 512M, or none [none]: ' "$out/$name.second" || fail "the second run did not offer the saved swap"
   grep -qF 'automatically (unattended-upgrades)? (Y/n): ' "$out/$name.second" || fail "the second run did not offer the saved upgrades"
   grep -qF 'like 04:00, or never [never]: ' "$out/$name.second" || fail "the second run did not offer the saved reboot time"
-  grep -qF 'off frees it [on]: ' "$out/$name.second" || fail "the second run did not offer the saved kdump"
+  grep -qF 'kdump reserves for a crash kernel? (Y/n): ' "$out/$name.second" || fail "the second run did not offer the saved kdump"
   if grep -F 'deploy user' "$out/$name.second"; then fail "the second run asked for the deploy user again"; fi
   # What only a change logs: every run upgrades the packages and devopsy.
   if grep -E 'wrote |removed |restarting|updating|disabling|creating|cli: installing|linked' "$out/$name.second"; then
@@ -312,7 +312,7 @@ test_one() {
     fail "the fourth run failed"
   }
   # The variables' settings never asked, the other one asked.
-  if grep -F -e 'swap file size' -e 'kdump:' "$out/$name.fourth"; then fail "the fourth run asked for a setting its environment set"; fi
+  if grep -F -e 'swap file size' -e 'kdump reserves' "$out/$name.fourth"; then fail "the fourth run asked for a setting its environment set"; fi
   grep -qF 'like 04:00, or never [never]: ' "$out/$name.fourth" || fail "the fourth run did not ask for the reboot time"
   rm -f "$out/$name.fourth"
   x grep -q ' crashkernel=' /boot/grub/grub.cfg || fail "DEVOPSY_SERVER_KDUMP=on did not put the crash kernel back"

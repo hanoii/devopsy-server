@@ -125,6 +125,15 @@ ask_yes() {
   done
 }
 
+# ask_on <key> <question>: an on or off setting asked as a yes or no
+# question (ask_yes), its current value the default.
+ask_on() {
+  local ask_on_answer default=y
+  [ "${!1}" = on ] || default=n
+  ask_yes ask_on_answer "$2" "$default"
+  if [ "$ask_on_answer" = y ]; then printf -v "$1" on; else printf -v "$1" off; fi
+}
+
 # Settings: the environment first, then the saved file, then the defaults.
 # from_env lists those the environment set, which are never asked; saved_*
 # hold the file's values.
@@ -238,16 +247,12 @@ validate_settings() {
 # the reboot time only while upgrades are on, kdump only where the image
 # has kdump-tools.
 ask_settings() {
-  local key question value problem default
+  local key question value problem
   for key in "${SETTINGS[@]}"; do
     [[ $from_env != *" $key "* ]] || continue
     case $key in
       DEVOPSY_SERVER_UPGRADES)
-        default=y
-        [ "$DEVOPSY_SERVER_UPGRADES" = on ] || default=n
-        ask_yes value "install security updates automatically (unattended-upgrades)?" "$default"
-        DEVOPSY_SERVER_UPGRADES=on
-        [ "$value" = y ] || DEVOPSY_SERVER_UPGRADES=off
+        ask_on "$key" "install security updates automatically (unattended-upgrades)?"
         continue
         ;;
       DEVOPSY_SERVER_USER)
@@ -261,7 +266,8 @@ ask_settings() {
         ;;
       DEVOPSY_SERVER_KDUMP)
         [ -f /etc/default/grub.d/kdump-tools.cfg ] || continue
-        question="kdump: on keeps its crash kernel's memory reserved, off frees it"
+        ask_on "$key" "keep the memory kdump reserves for a crash kernel?"
+        continue
         ;;
     esac
     while :; do

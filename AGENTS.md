@@ -91,7 +91,7 @@ devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for [devopsy](https://g
 - Config files are written with `write_file`, which writes, and returns success, only when the content changed, so a service restarts only then.
 - A choice is a `DEVOPSY_SERVER_*` setting listed in `SETTINGS` (so it is saved), with its check (`check_setting`), its default (`default_setting`) and its question (`ask_settings`), in `usage` and in the README's table.
 - At a terminal (`/dev/tty`, there under `curl | bash` over SSH), every run first asks whether to go on, since it installs or upgrades the base packages, Docker and devopsy, `n` stopping it with nothing changed; then it asks each setting the environment did not set, its current value (saved, else the default) what Enter gives: a rerun is where a setting changes.
-- A yes or no question goes through `ask_yes`, its default shown as `(Y/n)` or `(y/N)`, any other answer asked again; the setting it answers is saved `on` or `off`.
+- A yes or no question goes through `ask_yes`, its default shown as `(Y/n)` or `(y/N)`, any other answer asked again; an `on` or `off` setting asked so (`ask_on`, unattended upgrades and kdump) and saved as the word.
 - Without a terminal, or with `--yes`, nothing is asked: the environment, then the saved file, then the defaults.
 - A setting in the environment is never asked: a scripted run does what its variables say, at a terminal too.
 - The deploy user is asked until it exists (`deploy_user`, the saved one), and another one is refused once it does: the first one's home holds the releases.
