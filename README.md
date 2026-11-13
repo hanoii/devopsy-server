@@ -70,10 +70,6 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh
 | `DEVOPSY_SERVER_KDUMP`            | `on`      | `off` frees the memory kdump keeps for a crash kernel and disables kdump-tools, both from the next reboot. `on` puts both back. Asked only where the image has kdump-tools. |
 | `DEVOPSY_SERVER_FORCE`            | `0`       | `1` runs on a distribution other than Debian 13 or Ubuntu 26.04 without asking. Not saved. |
 
-Traefik's settings (ACME email, resolvers, the wildcard domain) are in
-devopsy-template-traefik's [Running
-Traefik](https://github.com/hanoii/devopsy-template-traefik/blob/main/docs/running.md#settings).
-
 ## Steps
 
 | Step       | What it does |
