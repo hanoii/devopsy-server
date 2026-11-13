@@ -62,7 +62,7 @@ They are saved to $CONFIG_FILE.
 EOF
   local saved
   # Read whole, never a grep in a pipe, which fails under pipefail when it
-  # matches nothing (a file of an older setup.sh's keys).
+  # matches nothing.
   saved=$(sed -n 's/^DEVOPSY_SERVER_/  &/p' "$CONFIG_FILE" 2>/dev/null) || true
   if [ -n "$saved" ]; then
     printf '\nSaved on this server:\n\n%s\n' "$saved"
@@ -111,7 +111,7 @@ load_settings() {
       case $line in '' | '#'*) continue ;; esac
       key=${line%%=*}
       value=${line#*=}
-      # Another prefix (an older setup.sh's DEVOPSY_*) is ignored.
+      # Only the settings: another key is ignored.
       [[ " ${SETTINGS[*]} " == *" $key "* ]] || continue
       # Values are saved with printf %q.
       eval "saved_$key=$value"
@@ -132,18 +132,11 @@ default_setting() {
   esac
 }
 
-# deploy_user: the server's deploy user once it exists: the saved one,
-# else the owner of devopsy's directory (step_cli), which a server set up
-# by any version has; nothing (exit 1) while neither is a user.
+# deploy_user: the server's deploy user once it exists, the saved one;
+# nothing (exit 1) while no user has that name.
 deploy_user() {
-  local user
-  for user in "${saved_DEVOPSY_SERVER_USER:-}" "$(stat -c %U /usr/local/lib/devopsy 2>/dev/null)"; do
-    if [ -n "$user" ] && [ "$user" != root ] && [ "$user" != UNKNOWN ] && id "$user" >/dev/null 2>&1; then
-      echo "$user"
-      return 0
-    fi
-  done
-  return 1
+  local user=${saved_DEVOPSY_SERVER_USER:-}
+  [ -n "$user" ] && id "$user" >/dev/null 2>&1 && echo "$user"
 }
 
 # none_word <key>: the word a setting takes for none, saved empty: the
@@ -301,7 +294,7 @@ preflight() {
 
 step_base() {
   log "base packages"
-  # Another list of Docker's repository than the docker step's (an older
+  # Another list of Docker's repository than the docker step's (a hand
   # install's, a provider's) goes before the first update: apt refuses
   # every source while two lists of it name different keys.
   # A list is a file apt reads (.list, .sources) with an entry, not a
@@ -410,19 +403,7 @@ EOF
   fi
   if [ -n "$stale" ] && command -v update-grub >/dev/null; then
     update-grub >/dev/null 2>&1 || die "update-grub failed"
-    # A drop-in after these (an admin's, an older setup.sh's) can undo
-    # them: what GRUB's config still lacks is said, and asks no reboot.
-    if ! grep -q ' kho=off' "$grubcfg"; then
-      reboot_kho=
-      warn "base: GRUB's config lacks kho=off after update-grub: a drop-in in $grubd after zz-kho-off.cfg takes it out"
-    fi
-    if [ "$kdump" = off ] && grep -q ' crashkernel=' "$grubcfg"; then
-      reboot_kdump=
-      warn "base: GRUB's config keeps crashkernel= after update-grub (DEVOPSY_SERVER_KDUMP=off): a drop-in in $grubd after zz-no-crashkernel.cfg puts it back"
-    elif [ "$kdump" = on ] && ! grep -q ' crashkernel=' "$grubcfg"; then
-      reboot_kdump='' kdump=kept-out
-      warn "base: GRUB's config lacks crashkernel= after update-grub (DEVOPSY_SERVER_KDUMP=on): a drop-in in $grubd takes it out, so kdump-tools stays as it is"
-    elif [ "$kdump" = on ] && [ -n "$reboot_kdump" ]; then
+    if [ "$kdump" = on ] && [ -n "$reboot_kdump" ]; then
       log "base: kdump's crash kernel back from the next reboot (DEVOPSY_SERVER_KDUMP=on)"
     fi
     if [ -n "$reboot_kho$reboot_kdump" ]; then

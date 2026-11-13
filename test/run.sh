@@ -195,11 +195,8 @@ test_one() {
     printf "%s\n" "[Service]" "Type=oneshot" "ExecStart=/bin/true" "[Install]" "WantedBy=multi-user.target" \
       >/etc/systemd/system/kdump-tools.service && systemctl enable --quiet kdump-tools.service'
 
-  # An older setup.sh's saved file, its DEVOPSY_* keys ignored: the first
-  # run below keeps kdump and makes no user deploy.
-  # --help works with it, though it holds no DEVOPSY_SERVER_* key.
-  x sh -c 'mkdir -p /etc/devopsy && printf "%s\n" "DEVOPSY_USER=deploy" "DEVOPSY_KDUMP=off" >/etc/devopsy/server.env'
-  x bash /src/setup.sh --help >/dev/null || fail "--help failed with an older setup.sh's saved file"
+  # --help works before anything is saved.
+  x bash /src/setup.sh --help >/dev/null || fail "--help failed"
 
   echo "== $base: first run, no terminal, no swap"
   # No terminal (docker exec without -t, as cloud-init): nothing asked. No
@@ -210,7 +207,6 @@ test_one() {
   }
   cat "$out/$name.first"
   if grep -F ']: ' "$out/$name.first"; then fail "the first run asked without a terminal"; fi
-  if x id deploy >/dev/null 2>&1; then fail "the first run took an older setup.sh's DEVOPSY_USER"; fi
   x grep -qx "DEVOPSY_SERVER_SWAP=''" /etc/devopsy/server.env || fail "none was not saved as no swap: $(x cat /etc/devopsy/server.env)"
   # devopsy's own part is named, not done.
   grep -q 'next, from your machine: devopsy @devopsy@<server>: --server-setup' "$out/$name.first" ||
@@ -273,7 +269,7 @@ test_one() {
   docker save "${images[@]}" | docker exec -i "$c" docker load -q >/dev/null || fail "the images did not load"
   server_setup
 
-  # An older install's list of Docker's repository beside setup.sh's, its
+  # A hand install's list of Docker's repository beside setup.sh's, its
   # key another file: apt refuses every source until it goes.
   # shellcheck disable=SC2016 # expanded in the container
   x sh -c 'cp /etc/apt/keyrings/docker.asc /etc/apt/keyrings/docker-old.asc && . /etc/os-release &&
@@ -326,22 +322,6 @@ test_one() {
   fi
   rm -f "$out/$name.second"
 
-  # A drop-in after setup.sh's that takes crashkernel= out again (an
-  # admin's, or the zz-devopsy.cfg of an older setup.sh's) is warned of,
-  # and asks for no reboot that would change nothing.
-  echo "== $base: DEVOPSY_SERVER_KDUMP=on under a later drop-in that takes crashkernel= out"
-  docker exec -i "$c" sh -c 'cat >/etc/default/grub.d/zz-other.cfg' <<'EOF'
-GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")
-EOF
-  # GRUB's config built with it, as on a server where it was applied.
-  x update-grub
-  x rm -f /run/reboot-required /run/reboot-required.pkgs
-  step_alone base DEVOPSY_SERVER_KDUMP=on
-  step_alone base DEVOPSY_SERVER_KDUMP=on
-  if x grep -qsx devopsy-server /run/reboot-required.pkgs; then
-    fail "a restart was asked to bring kdump back, which a later drop-in keeps out"
-  fi
-  x rm -f /etc/default/grub.d/zz-other.cfg
   rm -f "$out/$name.step"
 
   # A swap size the disk cannot hold is refused before anything changes,
@@ -445,14 +425,10 @@ swap_resized() {
     fail "the swap offered for the memory is not 512M, 1G, 2G, 2G, none"
 
   # The deploy user is fixed once it exists, never a saved name no user has
-  # (a first run stopped before its user step): with none, any name goes;
-  # with devopsy's directory owned by one, that one, whatever was saved.
+  # (a first run stopped before its user step): with none, any name goes.
   # shellcheck disable=SC2016 # expanded in the container
-  [ "$(x bash -c 'source <(sed "\$d" /src/setup.sh) && stat() { return 1; } && saved_DEVOPSY_SERVER_USER=deply && check_setting DEVOPSY_SERVER_USER deploy && echo ok')" = ok ] ||
-    fail "a saved deploy user that does not exist, on a server with none, refused another"
-  # shellcheck disable=SC2016 # expanded in the container
-  [ "$(x bash -c 'source <(sed "\$d" /src/setup.sh) && saved_DEVOPSY_SERVER_USER=deply && deploy_user')" = devopsy ] ||
-    fail "a saved deploy user that does not exist did not fall back to the owner of devopsy's directory"
+  [ "$(x bash -c 'source <(sed "\$d" /src/setup.sh) && saved_DEVOPSY_SERVER_USER=deply && check_setting DEVOPSY_SERVER_USER deploy && echo ok')" = ok ] ||
+    fail "a saved deploy user that does not exist refused another"
   # shellcheck disable=SC2016 # expanded in the container
   x bash -c 'source <(sed "\$d" /src/setup.sh) && saved_DEVOPSY_SERVER_USER=devopsy && check_setting DEVOPSY_SERVER_USER deploy' | grep -q 'this server.s deploy user' ||
     fail "another deploy user than the one that exists was not refused"

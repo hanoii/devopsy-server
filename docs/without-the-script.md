@@ -10,7 +10,7 @@ itself is not here: its two setups, run from your machine, are at the
 
 ## base
 
-Any older list with an entry for Docker's repository goes first: apt
+Any other list with an entry for Docker's repository goes first: apt
 refuses every source while two lists of it name different keys.
 
 ```sh
