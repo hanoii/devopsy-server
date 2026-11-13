@@ -421,6 +421,18 @@ swap_resized() {
   if x test -e /swapfile.tmp || x test -e /swapfile.new; then fail "the cut resize left /swapfile.tmp or /swapfile.new"; fi
   [ "$(x stat -c %s /swapfile)" = 268435456 ] || fail "the cut resize did not finish at 256M"
   [ "$(x swapon --show=NAME --noheadings)" = /swapfile ] || fail "after the cut resize, the swap on is not /swapfile alone"
+  # Bug: swap_room counts the stand-in as still to make when a cut resize
+  # (or one whose swapoff failed) left it on, so a size that fits is
+  # refused, and a run without a terminal dies on its saved value before
+  # any step. Here /swapfile is 256M and a 512M stand-in is on: what is
+  # left to make is the new 512M once the old 256M goes, 256M more, plus
+  # 1 GB; df stands in for a disk with 1400M free.
+  local room
+  # shellcheck disable=SC2016 # expanded in the container
+  room=$(x bash -c 'truncate -s 512M /swapfile.tmp && swapon /swapfile.tmp &&
+    source <(sed "\$d" /src/setup.sh) && df() { printf "Avail\n%s\n" $((1400 * 1048576)); } &&
+    check_setting DEVOPSY_SERVER_SWAP 512M; swapoff /swapfile.tmp && rm /swapfile.tmp' 2>&1)
+  [ -z "$room" ] || fail "a resize with its stand-in on already was refused for room it has: $room"
   step_alone swap DEVOPSY_SERVER_SWAP=
   [ -z "$(x swapon --show=NAME --noheadings)" ] || fail "none left a swap on"
   if x grep '^/swapfile ' /etc/fstab; then fail "none left /swapfile in /etc/fstab"; fi
