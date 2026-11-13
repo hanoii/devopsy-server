@@ -111,11 +111,6 @@ the server's `snapshots: root`, in the deploy user's
 `~/.config/devopsy/config.yaml`, or send one off the server
 (`--snapshots export <id> | ...`).
 
-With `DEVOPSY_ROOT` set, setup owns the first three lines of that config
-file while the first says so (`releases: root`), and keeps every line
-after them: add yours below. With `DEVOPSY_ROOT` unset again, it removes
-those lines, and the file goes only when nothing else is in it.
-
 A snapshot carries the environment's `shared/.env`, where its secrets
 live. Without that file, a database password a release generated no
 longer matches the database. Without snapshots, back up `shared/.env`,
@@ -147,7 +142,8 @@ releases](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#enviro
 
 Providers mount volumes elsewhere (DigitalOcean: `/mnt/<volume>`).
 Replace the provider's unit with one that mounts it where releases should
-live, like `/srv`, and set `DEVOPSY_ROOT=/srv`. devopsy's `--server-setup`
+live, like `/srv`, and make it the release root (devopsy-cli's [Release
+settings](https://github.com/hanoii/devopsy-cli/blob/main/docs/config.md#release-settings)). devopsy's `--server-setup`
 then gives the directory to the deploy user, as it does one root owns and
 that is empty (a fresh volume's `lost+found` aside), and refuses one root
 owns that holds files, or another user's. It adds a `docker.service.d` drop-in

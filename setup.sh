@@ -17,8 +17,7 @@ STEPS=(base swap docker user upgrades cli)
 CONFIG_FILE=/etc/devopsy/server.env
 # Settings saved to $CONFIG_FILE. A new one also goes in usage and README.md.
 SETTINGS=(
-  DEVOPSY_USER DEVOPSY_SWAP DEVOPSY_AUTO_REBOOT_TIME DEVOPSY_ROOT
-  DEVOPSY_KDUMP
+  DEVOPSY_USER DEVOPSY_SWAP DEVOPSY_AUTO_REBOOT_TIME DEVOPSY_KDUMP
 )
 
 usage() {
@@ -35,8 +34,6 @@ Settings are environment variables, all optional:
   curl -fsSL ... | DEVOPSY_SWAP=2G bash
 
   DEVOPSY_USER              The deploy user. Default: devopsy.
-  DEVOPSY_ROOT              Where releases live, like /srv on a block
-                            volume. Default: the deploy user's home.
   DEVOPSY_SWAP              Size of a swap file to create when the server
                             has no swap, like 2G. Default: none.
   DEVOPSY_AUTO_REBOOT_TIME  Reboot after upgrades that need it, at this
@@ -83,16 +80,11 @@ load_settings() {
   DEVOPSY_USER=${DEVOPSY_USER:-devopsy}
   DEVOPSY_SWAP=${DEVOPSY_SWAP:-}
   DEVOPSY_AUTO_REBOOT_TIME=${DEVOPSY_AUTO_REBOOT_TIME:-}
-  DEVOPSY_ROOT=${DEVOPSY_ROOT:-}
   DEVOPSY_KDUMP=${DEVOPSY_KDUMP:-on}
 }
 
 # Rejects bad values before they are saved, so a typo does not stick.
 validate_settings() {
-  if [ -n "$DEVOPSY_ROOT" ]; then
-    [[ $DEVOPSY_ROOT =~ ^/[A-Za-z0-9._/-]+$ ]] && [ "$DEVOPSY_ROOT" != / ] \
-      || die "DEVOPSY_ROOT must be an absolute directory, not /: $DEVOPSY_ROOT"
-  fi
   case $DEVOPSY_KDUMP in on | off) ;; *) die "DEVOPSY_KDUMP is on or off, not '$DEVOPSY_KDUMP'" ;; esac
 }
 
@@ -313,7 +305,7 @@ EOF
   log "docker: installing"
   apt_install apparmor docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-  # daemon.json, the socket buffers and the release root's mounts are
+  # daemon.json, the socket buffers and the release root are
   # devopsy's --server-setup's, which main names last.
   systemctl enable --now docker >/dev/null 2>&1
   docker_apparmor
@@ -370,8 +362,6 @@ step_user() {
     usermod -aG docker "$DEVOPSY_USER"
   fi
 
-  step_user_root
-
   # Root's authorized keys, so whoever manages the server can also log in as
   # the deploy user. Keys already there are kept.
   home=$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)
@@ -389,50 +379,6 @@ step_user() {
   else
     warn "user: root has no authorized keys, add some to $keys to log in as $DEVOPSY_USER"
   fi
-}
-
-# Where releases live: the deploy user's home, unless DEVOPSY_ROOT names
-# another directory (a block volume, say). devopsy reads it from the deploy
-# user's own config, releases: root. This step owns only its block at the
-# top of that file, the marker and the two releases: lines after it, and
-# keeps every line after the block as it is (devopsy appends its own, like
-# door:). Without DEVOPSY_ROOT it removes the block, and the file goes only
-# when nothing but blank lines is left; else the rest stays, unmarked, a
-# file no later run touches, as one it did not start. devopsy's
-# --server-setup makes the directory and gives it to the deploy user.
-step_user_root() {
-  local home config marker="# Written by devopsy-server (DEVOPSY_ROOT)." tmp
-  home=$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)
-  config=$home/.config/devopsy/config.yaml
-  if [ -f "$config" ] && ! head -n 1 "$config" | grep -qxF "$marker"; then
-    [ -z "$DEVOPSY_ROOT" ] || warn "user: $config exists and was not written by devopsy-server: set releases: root: $DEVOPSY_ROOT in it yourself"
-    return 0
-  fi
-  if [ -z "$DEVOPSY_ROOT" ] && [ ! -f "$config" ]; then
-    return 0
-  fi
-  # The block, when there is a root, then what follows the block, byte for
-  # byte.
-  tmp=$(mktemp)
-  {
-    [ -z "$DEVOPSY_ROOT" ] || printf '%s\nreleases:\n  root: %s\n' "$marker" "$DEVOPSY_ROOT"
-    if [ -f "$config" ]; then tail -n +4 "$config"; fi
-  } >"$tmp"
-  if [ -z "$DEVOPSY_ROOT" ]; then
-    if grep -q '[^[:space:]]' "$tmp"; then
-      write_file "$config" 644 <"$tmp" || true
-      chown "$DEVOPSY_USER:$DEVOPSY_USER" "$config"
-      log "user: releases live in $home again; the rest of $config stays, no longer devopsy-server's"
-    else
-      rm -f "$config"
-      log "user: releases live in $home again"
-    fi
-  else
-    install -d -m 755 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$home/.config" "$home/.config/devopsy"
-    write_file "$config" 644 <"$tmp" || true
-    chown "$DEVOPSY_USER:$DEVOPSY_USER" "$config"
-  fi
-  rm -f "$tmp"
 }
 
 step_upgrades() {

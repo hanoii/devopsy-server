@@ -103,20 +103,6 @@ install -m 600 -o devopsy -g devopsy /root/.ssh/authorized_keys /home/devopsy/.s
 
 ```
 
-Optional, releases elsewhere than the home (`DEVOPSY_ROOT`), like a block
-volume mounted on `/srv` (see ["A block volume"](things-to-know.md#a-block-volume)),
-where devopsy's `--server-setup` makes or gives the directory. The
-config file:
-
-```sh
-install -d -m 755 -o devopsy -g devopsy /home/devopsy/.config /home/devopsy/.config/devopsy
-printf 'releases:\n  root: /srv\n' > /home/devopsy/.config/devopsy/config.yaml
-chown devopsy:devopsy /home/devopsy/.config/devopsy/config.yaml
-
-```
-
-`setup.sh` leaves this file alone afterwards, since it did not write it.
-
 ## upgrades
 
 ```sh
