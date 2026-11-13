@@ -20,8 +20,8 @@ CONFIG_FILE=/etc/devopsy/server.env
 # Settings saved to $CONFIG_FILE. A new one also goes in check_setting,
 # default_setting, ask_settings, usage and README.md.
 SETTINGS=(
-  DEVOPSY_SERVER_USER DEVOPSY_SERVER_SWAP DEVOPSY_SERVER_AUTO_REBOOT_TIME
-  DEVOPSY_SERVER_KDUMP
+  DEVOPSY_SERVER_USER DEVOPSY_SERVER_SWAP DEVOPSY_SERVER_UPGRADES
+  DEVOPSY_SERVER_AUTO_REBOOT_TIME DEVOPSY_SERVER_KDUMP
 )
 # The swap step's sysctl file, which also says /swapfile is setup.sh's.
 SWAP_SYSCTL=/etc/sysctl.d/90-devopsy-swap.conf
@@ -35,10 +35,12 @@ Docker and devopsy.
 
   curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash
 
-At a terminal it asks for each setting, the saved value or the default in
-brackets, Enter keeping it. Without a terminal, or with --yes, it asks
-nothing (curl -fsSL ... | bash -s -- --yes). A setting given as a variable
-is taken as it is and not asked:
+At a terminal it first asks whether to go on, since it installs or
+upgrades the base packages, Docker and devopsy, then asks for each
+setting, the saved value or the default in brackets, Enter keeping it.
+Without a terminal, or with --yes, it asks nothing (curl -fsSL ... | bash
+-s -- --yes). A setting given as a variable is taken as it is and not
+asked:
 
   curl -fsSL ... | DEVOPSY_SERVER_SWAP=2G bash
 
@@ -47,9 +49,13 @@ is taken as it is and not asked:
   DEVOPSY_SERVER_SWAP              Size of /swapfile, like 2G or 512M, or
                                    none. Default: by the memory, where the
                                    server has no swap of its own.
+  DEVOPSY_SERVER_UPGRADES          on installs security updates
+                                   automatically (unattended-upgrades),
+                                   off turns that off. Default: on.
   DEVOPSY_SERVER_AUTO_REBOOT_TIME  Reboot after upgrades that need it, at
-                                   this time, like 04:00, or never.
-                                   Default: never.
+                                   this time, like 04:00, or never; with
+                                   upgrades off, nothing reboots on its
+                                   own. Default: never.
   DEVOPSY_SERVER_KDUMP             off frees the memory kdump reserves for
                                    a crash kernel, where the image has
                                    kdump-tools, from the next reboot.
@@ -97,6 +103,28 @@ ask() {
   printf -v "$1" %s "${ask_reply:-${3:-}}"
 }
 
+# ask_yes <var> <question> <y|n>: sets the variable to y or n, the answer
+# to a yes or no question, its default on Enter (shown as Y/n or y/N), and
+# asks again on any other answer.
+ask_yes() {
+  local ask_yes_reply choices='(y/N)'
+  [ "$3" = n ] || choices='(Y/n)'
+  while :; do
+    ask ask_yes_reply "$2 $choices"
+    case ${ask_yes_reply:-$3} in
+      y | Y | yes)
+        printf -v "$1" y
+        return
+        ;;
+      n | N | no)
+        printf -v "$1" n
+        return
+        ;;
+    esac
+    warn "answer y or n, not '$ask_yes_reply'"
+  done
+}
+
 # Settings: the environment first, then the saved file, then the defaults.
 # from_env lists those the environment set, which are never asked; saved_*
 # hold the file's values.
@@ -128,7 +156,7 @@ default_setting() {
   case $1 in
     DEVOPSY_SERVER_USER) deploy_user || echo devopsy ;;
     DEVOPSY_SERVER_SWAP) swap_default ;;
-    DEVOPSY_SERVER_KDUMP) echo on ;;
+    DEVOPSY_SERVER_UPGRADES | DEVOPSY_SERVER_KDUMP) echo on ;;
   esac
 }
 
@@ -187,7 +215,7 @@ check_setting() {
     DEVOPSY_SERVER_AUTO_REBOOT_TIME)
       [[ $value =~ ^(([01][0-9]|2[0-3]):[0-5][0-9])?$ ]] || echo "$key is a time, like 04:00, or never, not '$value'"
       ;;
-    DEVOPSY_SERVER_KDUMP)
+    DEVOPSY_SERVER_UPGRADES | DEVOPSY_SERVER_KDUMP)
       case $value in on | off) ;; *) echo "$key is on or off, not '$value'" ;; esac
       ;;
   esac
@@ -207,18 +235,30 @@ validate_settings() {
 # The questions, for every setting the environment did not set, again on
 # every run, each with its current value as the answer Enter gives: a
 # rerun is where a setting changes. The deploy user only until it exists,
-# kdump only where the image has kdump-tools.
+# the reboot time only while upgrades are on, kdump only where the image
+# has kdump-tools.
 ask_settings() {
-  local key question value problem
+  local key question value problem default
   for key in "${SETTINGS[@]}"; do
     [[ $from_env != *" $key "* ]] || continue
     case $key in
+      DEVOPSY_SERVER_UPGRADES)
+        default=y
+        [ "$DEVOPSY_SERVER_UPGRADES" = on ] || default=n
+        ask_yes value "install security updates automatically (unattended-upgrades)?" "$default"
+        DEVOPSY_SERVER_UPGRADES=on
+        [ "$value" = y ] || DEVOPSY_SERVER_UPGRADES=off
+        continue
+        ;;
       DEVOPSY_SERVER_USER)
         ! deploy_user >/dev/null || continue
         question="deploy user, the one devopsy logs in as"
         ;;
       DEVOPSY_SERVER_SWAP) question="swap file size, like 2G or 512M, or none" ;;
-      DEVOPSY_SERVER_AUTO_REBOOT_TIME) question="reboot after upgrades that need it at, like 04:00, or never" ;;
+      DEVOPSY_SERVER_AUTO_REBOOT_TIME)
+        [ "$DEVOPSY_SERVER_UPGRADES" = on ] || continue
+        question="reboot after upgrades that need it at, like 04:00, or never"
+        ;;
       DEVOPSY_SERVER_KDUMP)
         [ -f /etc/default/grub.d/kdump-tools.cfg ] || continue
         question="kdump: on keeps its crash kernel's memory reserved, off frees it"
@@ -283,8 +323,8 @@ preflight() {
       if [ "${DEVOPSY_SERVER_FORCE:-0}" = 1 ]; then
         warn "not Debian 13 or Ubuntu 26.04 (${PRETTY_NAME:-unknown}), continuing because DEVOPSY_SERVER_FORCE=1"
       elif can_ask; then
-        ask answer "this is ${PRETTY_NAME:-unknown}, not Debian 13 or Ubuntu 26.04: continue anyway? (y/N)"
-        case $answer in y | Y | yes) ;; *) die "stopped: nothing changed" ;; esac
+        ask_yes answer "this is ${PRETTY_NAME:-unknown}, not Debian 13 or Ubuntu 26.04: continue anyway?" n
+        [ "$answer" = y ] || die "stopped: nothing changed"
       else
         die "expects Debian 13 or Ubuntu 26.04, found ${PRETTY_NAME:-unknown}. Set DEVOPSY_SERVER_FORCE=1 to try anyway."
       fi
@@ -729,6 +769,24 @@ step_user() {
 }
 
 step_upgrades() {
+  # Off undoes what on put: no upgrade runs, so no reboot after one; the
+  # package lists still refresh, for apt to show what is pending.
+  if [ "$DEVOPSY_SERVER_UPGRADES" = off ]; then
+    log "upgrades: unattended security upgrades off (DEVOPSY_SERVER_UPGRADES=off)"
+    write_file /etc/apt/apt.conf.d/20auto-upgrades <<'EOF' || true
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "0";
+EOF
+    if [ -e /etc/apt/apt.conf.d/52devopsy-reboot ]; then
+      rm -f /etc/apt/apt.conf.d/52devopsy-reboot
+      log "removed /etc/apt/apt.conf.d/52devopsy-reboot"
+    fi
+    if systemctl is-enabled --quiet unattended-upgrades 2>/dev/null; then
+      log "upgrades: disabling unattended-upgrades"
+      systemctl disable --now unattended-upgrades >/dev/null 2>&1
+    fi
+    return
+  fi
   log "upgrades: unattended security upgrades"
   write_file /etc/apt/apt.conf.d/20auto-upgrades <<'EOF' || true
 APT::Periodic::Update-Package-Lists "1";
@@ -789,7 +847,12 @@ main() {
   # the questions offer to change.
   # shellcheck disable=SC2086 # one key a word
   [ "$from_env" = ' ' ] || validate_settings $from_env
-  if can_ask; then ask_settings; fi
+  if can_ask; then
+    local answer
+    ask_yes answer "setup.sh installs or upgrades the base packages, Docker and devopsy, which every devopsy server needs: continue?" y
+    [ "$answer" = y ] || die "stopped: nothing changed"
+    ask_settings
+  fi
   validate_settings
   # Saved before running, so a failed run still remembers its settings.
   save_settings
