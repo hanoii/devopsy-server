@@ -81,7 +81,7 @@ devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for [devopsy](https://g
 
 - `setup.sh`: the settings (`load_settings`, `validate_settings`, `save_settings`, `usage`), `preflight`, then one `step_*` function per step, run in order by `main`.
 - `cloud-init.yaml`: the XFS conversion, its scripts in `write_files` (`internals/xfs.md`).
-- `test/run.sh` and `test/Dockerfile` run `setup.sh` in containers (Checks).
+- `test/run.sh` and `test/Dockerfile` run `setup.sh` in containers, with fakes of the swap tools in `test/fakes` (Checks).
 - `.github/workflows/` holds `lint.yml` and `setup.yml`.
 - `README.md` and `docs/` are the user-facing behavior, kept in step with every change: the README's steps and settings tables, `docs/xfs.md`, `docs/without-the-script.md` (each step by hand, so a change to a `step_*` function changes its commands there) and `docs/things-to-know.md`.
 
@@ -89,10 +89,15 @@ devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for [devopsy](https://g
 
 - Every step is idempotent: a second run in a row changes nothing and restarts nothing.
 - Config files are written with `write_file`, which writes, and returns success, only when the content changed, so a service restarts only then.
-- A choice is a `DEVOPSY_SERVER_*` setting with a default in `load_settings`, listed in `SETTINGS` (so it is saved), in `usage` and in the README's table.
+- A choice is a `DEVOPSY_SERVER_*` setting listed in `SETTINGS` (so it is saved), with its check (`check_setting`), its default (`default_setting`) and its question (`ask_settings`), in `usage` and in the README's table.
+- At a terminal (`/dev/tty`, there under `curl | bash` over SSH), every run asks each setting the environment did not set, its current value (saved, else the default) what Enter gives: a rerun is where a setting changes.
+- Without a terminal, or with `--yes`, nothing is asked: the environment, then the saved file, then the defaults.
+- A setting in the environment is never asked: a scripted run does what its variables say, at a terminal too.
+- The deploy user is asked on the first run only, and another one later is refused: the first one's home holds the releases.
+- A setting's none (`none` for the swap, `never` for the reboot time) is saved empty, and shown as the word.
 - The saved file is read for `DEVOPSY_SERVER_*` keys only: a key of another name (an older setup.sh's `DEVOPSY_*`) is ignored, never migrated.
 - `usage` runs before `preflight`, so `--help` works anywhere, as any user, and shows the saved settings when it can read them.
-- Settings are validated, then saved, before any step runs (`validate_settings`, `save_settings`): a failed run remembers them, and a typo never sticks.
+- Settings are validated, then saved, before any step runs (`validate_settings` before the questions, each answer as it is given, `save_settings`): a failed run remembers them, and a typo never sticks.
 - A setting applies its state on every run, both ways (for example `DEVOPSY_SERVER_KDUMP=on` puts back what `off` took away).
 - Never change the SSH server's configuration: providers set it up, and a mistake there locks the operator out.
 - No host firewall: the provider's covers it (`docs/things-to-know.md`).
@@ -107,7 +112,7 @@ devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for [devopsy](https://g
 - Nothing here writes devopsy's config (the deploy user's `~/.config/devopsy/`), the release root included: devopsy's settings are devopsy's.
 - What devopsy sets up itself is never done here, `--server-setup`'s (`daemon.json`, the socket buffers, the release root and Docker's wait for it, the metadata firewall) and `--project-users setup`'s (other users' processes hidden, what project users need): setup.sh's last line names `--server-setup`, and never runs it, since it asks before changing what someone else set.
 - What setup.sh once set and devopsy now does (`daemon.json`'s four keys, the socket buffers' file, a saved `DEVOPSY_ADDRESS_POOLS`, `/proc`'s fstab line, the `devopsy-proc` group and polkit's drop-in) is left as it is, never removed or migrated: devopsy adopts it.
-- A setup script, never a CLI: no arguments but `--help`, every step on every run, and no command left on the server (no step names, no subcommands, no installed copy that updates itself).
+- A setup script, never a CLI: no arguments but `--help` and `--yes`, every step on every run, and no command left on the server (no step names, no subcommands, no installed copy that updates itself).
 - What a server needs after setup is devopsy and plain SSH.
 - A rerun upgrades what the script installed and nothing else: the apt packages it names (an `apt-get install` upgrades an installed one), Docker among them, and devopsy (`devopsy --upgrade` as the deploy user, a failure only warning); never a `dist-upgrade`.
 - setup.sh never reboots, since a rerun on a live server would take its sites down; what needs a reboot raises the restart flag a kernel update does (`/run/reboot-required`, `devopsy-server` in its `.pkgs`), only when the reboot changes something.
@@ -132,6 +137,9 @@ devopsy-server prepares a Debian 13 or Ubuntu 26.04 host for [devopsy](https://g
 - unattended-upgrades takes the flag at `DEVOPSY_SERVER_AUTO_REBOOT_TIME`, even on a day with nothing to upgrade.
 - `update-grub` runs while GRUB's config does not say what the drop-in does yet, never only when the drop-in was written, so a run cut between the two is finished by the next.
 - The swap step checks `/swapfile`, that it is on, and its fstab line each apart, the file made under another name and renamed once it is a swap area, so a run cut between them is finished by the next.
+- A new swap size resizes `/swapfile`: the new file (`/swapfile.new`) on before the old one off, then renamed while on, so the server is never without; a resize cut at any point is finished or made again by the next run, and one the memory cannot take (`swapoff` failing) leaves the old size.
+- `none` removes `/swapfile` only where setup.sh made it (its `90-devopsy-swap.conf`), turned off first and the sysctl file last; a server with a swap of its own is never touched.
+- The swap offered is `/swapfile`'s size where it is setup.sh's, none where the server has a swap of its own, else by the memory (`swap_for_ram`), the default without a terminal too.
 - Sysctl files (the swap step's `vm.swappiness`) are written with `write_file` and applied with `sysctl -p` on every run, never only when written, so a run failing at `sysctl` is finished by the next.
 - The base packages are devopsy's tools (devopsy-cli's `--server-setup-howto tools`), `openssh-client` for a sync across servers, and what the steps fetch with and run, never a package for a server's other uses: the admin installs those.
 - A package dropped from the list is never removed from a server.
@@ -178,9 +186,9 @@ test/run.sh
 
 - `test/run.sh` runs `setup.sh` in a privileged container per release, systemd its first process, with its own Docker (`test/Dockerfile`, systemd-resolved added as cloud images have it, and sshd), and checks what the first run set up, that a second wrote, created, restarted and updated nothing, devopsy's `--server-setup --yes` after them over the container's own sshd, and the runs after with changed settings.
 - `test/run.sh --devopsy <file>` copies that devopsy over the one setup.sh installs, to test a devopsy-cli branch before its tag; the input is `run.sh`'s, never `setup.sh`'s.
-- What `test/run.sh` checks: Docker, the deploy user and its keys, devopsy, the last line naming `--server-setup` and no `daemon.json` or socket buffers' file of setup.sh's, LLMNR closed, the kernel's arguments for kexec's memory and the restart flag (from kdump's drop-in and an `update-grub` planted in both), a swap file left on without its fstab line (with fakes of `swapon`, `mkswap`, `fallocate` and of `sysctl` for `vm.swappiness`), `DEVOPSY_SERVER_KDUMP` off then on, another list of Docker's repository removed, and of `--server-setup`: `daemon.json`'s parts put with a key of another's kept and pools set by hand kept and recorded, with a container running no restart and the restart flag raised, then Docker's restart confirmed, the socket buffers, the mounts drop-in, the metadata firewall loaded, a run after with nothing to change, and setup.sh's next run touching neither `daemon.json` nor Docker.
+- What `test/run.sh` checks: the questions (none without a terminal or with `--yes`, the saved values offered at a terminal through `script`, the deploy user asked once, a setting in the environment not asked, a wrong answer asked again), Docker, the deploy user and its keys, devopsy, the last line naming `--server-setup` and no `daemon.json` or socket buffers' file of setup.sh's, LLMNR closed, the kernel's arguments for kexec's memory and the restart flag (from kdump's drop-in and an `update-grub` planted in both), a swap file left on without its fstab line, resized (the new one on before the old one off), a resize cut after the old one went off, and none, with the fakes of `test/fakes`, the size offered for the memory, `DEVOPSY_SERVER_KDUMP` off then on, another list of Docker's repository removed, and of `--server-setup`: `daemon.json`'s parts put with a key of another's kept and pools set by hand kept and recorded, with a container running no restart and the restart flag raised, then Docker's restart confirmed, the socket buffers, the mounts drop-in, the metadata firewall loaded, a run after with nothing to change, and setup.sh's next run touching neither `daemon.json` nor Docker.
 - A new check goes in `test/run.sh`, and a new supported release is a line of its default list and of `setup.yml`'s matrix.
-- `test/run.sh` cannot show AppArmor (the container shares the host's kernel), a real swap file (`swapon` and `vm.swappiness` would act on the host), `--help` and saved settings, or the XFS conversion; the socket buffers `--server-setup` sets are the host's, and where the container may not set `net.core` (GitHub's runners) their raise is `--server-setup`'s one failure.
+- `test/run.sh` cannot show AppArmor (the container shares the host's kernel), a real swap file (`swapon` and `vm.swappiness` would act on the host), `--help`, or the XFS conversion; the socket buffers `--server-setup` sets are the host's, and where the container may not set `net.core` (GitHub's runners) their raise is `--server-setup`'s one failure.
 - CI runs `lint.yml` (shellcheck and the schema) on every push, and `setup.yml` (`test/run.sh`, one job per release) on a push that changes `setup.sh` or the test, weekly (Docker's repository, the releases' packages and defaults and devopsy's installer change without a commit here) and on demand; a newer push to a branch cancels the run before it.
 - What a container cannot show is checked on a real machine, an OrbStack one (`orb create debian:trixie devopsy-test`, `orb create ubuntu:resolute devopsy-test`) or a cloud server: the script with test settings, again without them, `--help`, then the machine deleted (`orb delete -f devopsy-test`).
 - OrbStack machines lack openssh-server and mask systemd-resolved; to reproduce the cloud's port 53 clash, bind a listener to 127.0.0.53:53 before starting acme-dns.

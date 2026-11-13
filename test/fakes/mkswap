@@ -1,0 +1,3 @@
+#!/bin/sh
+# mkswap's fake (test/run.sh).
+echo "mkswap $*" >>/tmp/swap.calls

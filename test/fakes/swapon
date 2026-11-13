@@ -1,0 +1,13 @@
+#!/bin/sh
+# swapon's fake (test/run.sh): the files it turned on, by inode, in
+# /tmp/swaps, so a file renamed while on is listed by its new name, as the
+# kernel lists it; the real one would act on the host's kernel.
+echo "swapon $*" >>/tmp/swap.calls
+case $1 in
+  --show=*)
+    if [ -f /tmp/swaps ]; then
+      while read -r i; do find / -xdev -maxdepth 1 -inum "$i"; done </tmp/swaps
+    fi
+    ;;
+  *) stat -c %i "$1" >>/tmp/swaps ;;
+esac

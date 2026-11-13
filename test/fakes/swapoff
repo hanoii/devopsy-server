@@ -1,0 +1,6 @@
+#!/bin/sh
+# swapoff's fake (test/run.sh): the file off swapon's list.
+echo "swapoff $*" >>/tmp/swap.calls
+i=$(stat -c %i "$1")
+grep -vx "$i" /tmp/swaps >/tmp/swaps.new || true
+mv /tmp/swaps.new /tmp/swaps

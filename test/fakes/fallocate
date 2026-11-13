@@ -1,0 +1,5 @@
+#!/bin/sh
+# fallocate's fake (test/run.sh), as setup.sh calls it (-l <size> <file>):
+# a sparse file of that size.
+echo "fallocate $*" >>/tmp/swap.calls
+truncate -s "$2" "$3"
