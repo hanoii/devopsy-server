@@ -55,9 +55,9 @@ whether to go on, and without a terminal stops unless
 in `/etc/devopsy/server.env`:
 
 ```sh
-curl -fsSL .../setup.sh | bash -s -- --yes
-curl -fsSL .../setup.sh | DEVOPSY_SERVER_SWAP=2G bash
-curl -fsSL .../setup.sh | bash -s -- --help
+curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | DEVOPSY_SERVER_SWAP=2G bash
+curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash -s -- --help
 ```
 
 ## Settings
