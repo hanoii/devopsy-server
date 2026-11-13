@@ -140,6 +140,16 @@ preflight() {
 
 step_base() {
   log "base packages"
+  # Another list of Docker's repository than the docker step's (an older
+  # install's, a provider's) goes before the first update: apt refuses
+  # every source while two lists of it name different keys.
+  local f
+  for f in /etc/apt/sources.list.d/*; do
+    if [ "$f" != /etc/apt/sources.list.d/docker.sources ] && grep -qs download.docker.com "$f"; then
+      rm -f "$f"
+      log "base: removed $f, another list of Docker's repository"
+    fi
+  done
   apt-get update -q >/dev/null
   # devopsy's tools (tar, flock, setsid, script, mkfifo, tail), ssh for a
   # sync across servers, and what the steps here fetch with and run.
@@ -184,22 +194,28 @@ EOF
   # passes the word to init, which ignores it. kdump's crash kernel, where
   # kdump-tools adds crashkernel= (Vultr's Ubuntu: 320 MB), is a setting,
   # DEVOPSY_KDUMP: off takes crashkernel= out and disables its service
-  # (it fails without that memory), on puts both back. A drop-in after
-  # the image's (zz-), applied by the next reboot, which the restart flag
-  # asks for as a kernel update does (DEVOPSY_AUTO_REBOOT_TIME takes it),
-  # only when it changes something: the running kernel holds KHO's
-  # scratch or a crash kernel to free, or kdump comes back.
-  # GRUB's config is updated while it does not say what the drop-in does,
+  # (it fails without that memory), on puts both back. Drop-ins after
+  # the image's (zz-), the files and lines devopsy's how-to topics
+  # (kexec-handover, kdump) write, applied by the next reboot, which the
+  # restart flag asks for as a kernel update does (DEVOPSY_AUTO_REBOOT_TIME
+  # takes it), only when it changes something: the running kernel holds
+  # KHO's scratch or a crash kernel to free, or kdump comes back.
+  # GRUB's config is updated while it does not say what the drop-ins do,
   # so a run cut after writing is finished by the next, and an applied
   # one updates nothing.
   local grubd=/etc/default/grub.d grubcfg=/boot/grub/grub.cfg kdump='' stale='' reboot='' mb
   if [ -f "$grubd/kdump-tools.cfg" ]; then kdump=$DEVOPSY_KDUMP; fi
   # shellcheck disable=SC2016 # grub-mkconfig expands them
-  {
-    echo '# Written by devopsy-server (setup.sh, base): no memory for kexec.'
-    [ "$kdump" != off ] || echo 'GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")'
-    echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"'
-  } | write_file "$grubd/zz-devopsy.cfg" || true
+  echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"' |
+    write_file "$grubd/zz-kho-off.cfg" || true
+  if [ "$kdump" = off ]; then
+    # shellcheck disable=SC2016 # grub-mkconfig expands them
+    echo 'GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")' |
+      write_file "$grubd/zz-no-crashkernel.cfg" || true
+  elif [ -f "$grubd/zz-no-crashkernel.cfg" ]; then
+    rm -f "$grubd/zz-no-crashkernel.cfg"
+    log "base: removed $grubd/zz-no-crashkernel.cfg"
+  fi
   if [ -f "$grubcfg" ]; then
     if ! grep -q ' kho=off' "$grubcfg"; then
       stale=1

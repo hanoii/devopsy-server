@@ -28,12 +28,11 @@ The kernel's arguments, applied by the next reboot. With
 exists, also the `crashkernel=` line and kdump-tools:
 
 ```sh
-cat > /etc/default/grub.d/zz-devopsy.cfg <<'EOF'
-GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")
-GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"
-EOF
-update-grub
+printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"' > /etc/default/grub.d/zz-kho-off.cfg
+# DEVOPSY_KDUMP=off only
+printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")' > /etc/default/grub.d/zz-no-crashkernel.cfg
 systemctl disable kdump-tools
+update-grub
 ```
 
 After the reboot `grep CMA /proc/pagetypeinfo` shows no CMA blocks and
@@ -66,6 +65,7 @@ sysctl -p /etc/sysctl.d/90-devopsy-swap.conf
 ## docker
 
 ```sh
+for f in /etc/apt/sources.list.d/*; do if grep -qs download.docker.com "$f"; then rm -f "$f"; fi; done
 . /etc/os-release
 install -d -m 755 /etc/apt/keyrings
 curl -fsSL "https://download.docker.com/linux/$ID/gpg" -o /etc/apt/keyrings/docker.asc

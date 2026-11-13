@@ -221,7 +221,7 @@ test_one() {
   }
   cat "$out/$name.second"
   # What only a change logs: every run upgrades the packages and devopsy.
-  if grep -E 'wrote |restarting|updating|disabling|creating|cli: installing|linked' "$out/$name.second"; then
+  if grep -E 'wrote |removed |restarting|updating|disabling|creating|cli: installing|linked' "$out/$name.second"; then
     fail "the second run changed something"
   fi
   [ "$(x sh -c 'wc -l </tmp/update-grub.runs')" = 1 ] || fail "update-grub did not run exactly once"
@@ -231,7 +231,13 @@ test_one() {
 
   server_setup
 
-  echo "== $base: third run, DEVOPSY_KDUMP=off"
+  # An older install's list of Docker's repository beside setup.sh's, its
+  # key another file: apt refuses every source until it goes.
+  # shellcheck disable=SC2016 # expanded in the container
+  x sh -c 'cp /etc/apt/keyrings/docker.asc /etc/apt/keyrings/docker-old.asc && . /etc/os-release &&
+    echo "deb [signed-by=/etc/apt/keyrings/docker-old.asc] https://download.docker.com/linux/$ID $VERSION_CODENAME stable" >/etc/apt/sources.list.d/docker.list'
+
+  echo "== $base: third run, DEVOPSY_KDUMP=off, another list of Docker's"
   x cp /etc/docker/daemon.json /tmp/daemon.before
   invocation=$(x systemctl show -p InvocationID --value docker)
   x env DEVOPSY_KDUMP=off bash /src/setup.sh >"$out/$name.third" 2>&1 || {
@@ -239,6 +245,7 @@ test_one() {
     fail "the third run failed"
   }
   rm -f "$out/$name.third"
+  if x test -e /etc/apt/sources.list.d/docker.list; then fail "the other list of Docker's repository is still there"; fi
   x cmp -s /tmp/daemon.before /etc/docker/daemon.json || fail "setup.sh changed daemon.json after --server-setup"
   [ "$(x systemctl show -p InvocationID --value docker)" = "$invocation" ] || fail "setup.sh restarted Docker after --server-setup"
   x systemctl is-active --quiet docker || fail "Docker is not running after the third run"
