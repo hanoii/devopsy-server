@@ -119,9 +119,10 @@ the server's `snapshots: root`, in the deploy user's
 `~/.config/devopsy/config.yaml`, or send one off the server
 (`--snapshots export <id> | ...`).
 
-With `DEVOPSY_ROOT` set, setup owns that config file while its first line
-says so. To add to it, delete that line and set `releases: root`
-yourself.
+With `DEVOPSY_ROOT` set, setup owns the first three lines of that config
+file while the first says so (`releases: root`), and keeps every line
+after them: add yours below. With `DEVOPSY_ROOT` unset again, it removes
+those lines, and the file goes only when nothing else is in it.
 
 A snapshot carries the environment's `shared/.env`, where its secrets
 live. Without that file, a database password a release generated no

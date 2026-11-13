@@ -72,7 +72,7 @@ On a new server, `cloud-init.yaml` can first convert its root to XFS
 | `DEVOPSY_APT_PACKAGES`     |         | Extra apt packages, space separated, like `htop ncdu`. Removing one from the list does not uninstall it. |
 | `DEVOPSY_SWAP`             |         | Swap file size, like `2G` (see ["swap"](docs/without-the-script.md#swap)). |
 | `DEVOPSY_AUTO_REBOOT_TIME` |         | Reboot after upgrades that need it, at this time, like `04:00`. |
-| `DEVOPSY_ROOT`             |         | Where releases live, like `/srv` on a block volume; default the deploy user's home. Written as `releases: root` in the deploy user's `~/.config/devopsy/config.yaml` (devopsy-cli's [Release settings](https://github.com/hanoii/devopsy-cli/blob/main/docs/config.md#release-settings)); a file there that devopsy-server did not write is left alone. |
+| `DEVOPSY_ROOT`             |         | Where releases live, like `/srv` on a block volume; default the deploy user's home. Written as `releases: root` at the top of the deploy user's `~/.config/devopsy/config.yaml`, under a line marking it as devopsy-server's (devopsy-cli's [Release settings](https://github.com/hanoii/devopsy-cli/blob/main/docs/config.md#release-settings)); lines after those are kept, and a file there that devopsy-server did not start is left alone. |
 | `DEVOPSY_FORCE`            | `0`     | `1` to run on something other than Debian 13 or Ubuntu 26.04. Not saved. |
 
 Traefik's settings (ACME email, resolvers, the wildcard domain) are

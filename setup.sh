@@ -469,27 +469,46 @@ step_user() {
 
 # Where releases live: the deploy user's home, unless DEVOPSY_ROOT names
 # another directory (a block volume, say). devopsy reads it from the deploy
-# user's own config, releases: root; this step writes that file, marked as
-# its own, and never touches one it did not write. devopsy's --server-setup
-# makes the directory and gives it to the deploy user.
+# user's own config, releases: root. This step owns only its block at the
+# top of that file, the marker and the two releases: lines after it, and
+# keeps every line after the block as it is (devopsy appends its own, like
+# door:). Without DEVOPSY_ROOT it removes the block, and the file goes only
+# when nothing but blank lines is left; else the rest stays, unmarked, a
+# file no later run touches, as one it did not start. devopsy's
+# --server-setup makes the directory and gives it to the deploy user.
 step_user_root() {
-  local home config marker="# Written by devopsy-server (DEVOPSY_ROOT)."
+  local home config marker="# Written by devopsy-server (DEVOPSY_ROOT)." tmp
   home=$(getent passwd "$DEVOPSY_USER" | cut -d: -f6)
   config=$home/.config/devopsy/config.yaml
   if [ -f "$config" ] && ! head -n 1 "$config" | grep -qxF "$marker"; then
     [ -z "$DEVOPSY_ROOT" ] || warn "user: $config exists and was not written by devopsy-server: set releases: root: $DEVOPSY_ROOT in it yourself"
     return 0
   fi
+  if [ -z "$DEVOPSY_ROOT" ] && [ ! -f "$config" ]; then
+    return 0
+  fi
+  # The block, when there is a root, then what follows the block, byte for
+  # byte.
+  tmp=$(mktemp)
+  {
+    [ -z "$DEVOPSY_ROOT" ] || printf '%s\nreleases:\n  root: %s\n' "$marker" "$DEVOPSY_ROOT"
+    if [ -f "$config" ]; then tail -n +4 "$config"; fi
+  } >"$tmp"
   if [ -z "$DEVOPSY_ROOT" ]; then
-    if [ -f "$config" ]; then
+    if grep -q '[^[:space:]]' "$tmp"; then
+      write_file "$config" 644 <"$tmp" || true
+      chown "$DEVOPSY_USER:$DEVOPSY_USER" "$config"
+      log "user: releases live in $home again; the rest of $config stays, no longer devopsy-server's"
+    else
       rm -f "$config"
       log "user: releases live in $home again"
     fi
-    return 0
+  else
+    install -d -m 755 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$home/.config" "$home/.config/devopsy"
+    write_file "$config" 644 <"$tmp" || true
+    chown "$DEVOPSY_USER:$DEVOPSY_USER" "$config"
   fi
-  install -d -m 755 -o "$DEVOPSY_USER" -g "$DEVOPSY_USER" "$home/.config" "$home/.config/devopsy"
-  printf '%s\nreleases:\n  root: %s\n' "$marker" "$DEVOPSY_ROOT" | write_file "$config" 644 || true
-  chown "$DEVOPSY_USER:$DEVOPSY_USER" "$config"
+  rm -f "$tmp"
 }
 
 step_upgrades() {
