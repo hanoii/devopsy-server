@@ -195,6 +195,13 @@ test_one() {
     printf "%s\n" "[Service]" "Type=oneshot" "ExecStart=/bin/true" "[Install]" "WantedBy=multi-user.target" \
       >/etc/systemd/system/kdump-tools.service && systemctl enable --quiet kdump-tools.service'
 
+  # An older setup.sh's saved file, its DEVOPSY_* keys ignored: the first
+  # run below keeps kdump and makes no user deploy.
+  # BUG (review, round 1): --help fails on it (exit 1): usage's grep of the
+  # saved DEVOPSY_SERVER_* keys finds none, and pipefail fails the pipe.
+  x sh -c 'mkdir -p /etc/devopsy && printf "%s\n" "DEVOPSY_USER=deploy" "DEVOPSY_KDUMP=off" >/etc/devopsy/server.env'
+  x bash /src/setup.sh --help >/dev/null || fail "--help failed with an older setup.sh's saved file"
+
   echo "== $base: first run, no terminal, no swap"
   # No terminal (docker exec without -t, as cloud-init): nothing asked. No
   # swap, since the real swapon would act on the host's kernel.
@@ -204,6 +211,7 @@ test_one() {
   }
   cat "$out/$name.first"
   if grep -F ']: ' "$out/$name.first"; then fail "the first run asked without a terminal"; fi
+  if x id deploy >/dev/null 2>&1; then fail "the first run took an older setup.sh's DEVOPSY_USER"; fi
   x grep -qx "DEVOPSY_SERVER_SWAP=''" /etc/devopsy/server.env || fail "none was not saved as no swap: $(x cat /etc/devopsy/server.env)"
   # devopsy's own part is named, not done.
   grep -q 'next, from your machine: devopsy @devopsy@<server>: --server-setup' "$out/$name.first" ||
@@ -316,6 +324,44 @@ test_one() {
     fail "the fourth run made or turned on a swap file that was on already"
   fi
   rm -f "$out/$name.second"
+
+  # BUG (review, round 1): a drop-in after setup.sh's that takes
+  # crashkernel= out again (an admin's, or the zz-devopsy.cfg an older
+  # setup.sh wrote with DEVOPSY_KDUMP=off, which its servers keep) leaves
+  # GRUB's config without it whatever update-grub does: with
+  # DEVOPSY_SERVER_KDUMP=on, the default, every run updates GRUB, says
+  # kdump comes back and raises the restart flag, for a reboot that
+  # changes nothing.
+  echo "== $base: DEVOPSY_SERVER_KDUMP=on under a later drop-in that takes crashkernel= out"
+  docker exec -i "$c" sh -c 'cat >/etc/default/grub.d/zz-other.cfg' <<'EOF'
+GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")
+EOF
+  # GRUB's config built with it, as on a server where it was applied.
+  x update-grub
+  x rm -f /run/reboot-required /run/reboot-required.pkgs
+  step_alone base DEVOPSY_SERVER_KDUMP=on
+  step_alone base DEVOPSY_SERVER_KDUMP=on
+  if x grep -qsx devopsy-server /run/reboot-required.pkgs; then
+    fail "a restart was asked to bring kdump back, which a later drop-in keeps out"
+  fi
+  x rm -f /etc/default/grub.d/zz-other.cfg
+  rm -f "$out/$name.step"
+
+  # BUG (review, round 1): a swap size the disk cannot hold fails at
+  # fallocate, which leaves what fit in /swapfile.new (test/fakes/fallocate,
+  # as the real one on ext4 and XFS): the disk full under the running
+  # sites, until the next run removes it and fills it again.
+  echo "== $base: a swap size larger than the free disk"
+  local big
+  big=$(($(x df --output=avail -B1G / | tail -n 1) + 10))G
+  x cp /etc/devopsy/server.env /tmp/server.env.before
+  x env DEVOPSY_SERVER_SWAP="$big" bash /src/setup.sh >"$out/$name.big" 2>&1 || true
+  cat "$out/$name.big"
+  rm -f "$out/$name.big"
+  x cp /tmp/server.env.before /etc/devopsy/server.env
+  if x test -e /swapfile.new; then fail "a swap of $big, more than the free disk, left /swapfile.new filling it"; fi
+  [ "$(x stat -c %s /swapfile)" = 67108864 ] || fail "a swap of $big, more than the free disk, changed /swapfile"
+  [ "$(x swapon --show=NAME --noheadings)" = /swapfile ] || fail "a swap of $big, more than the free disk, left /swapfile off"
 
   swap_resized
   echo "== $base: ok"
