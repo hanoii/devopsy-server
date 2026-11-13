@@ -55,18 +55,10 @@ key. Releases are pushed over SSH, and nothing listens for webhooks.
 
 ## Other users' processes
 
-A user sees only its own processes in `ps`, `top` and `/proc`. A
-process's command line names what it works on, and devopsy's sessions
-send their whole script as one: projects, paths and the operator's
-command. Another user of the server, like a devopsy-cli [project
-user](https://github.com/hanoii/devopsy-cli/blob/main/docs/project-users.md),
-sees none of them.
-
-Root and the `devopsy-proc` group see every process. The deploy user is
-in that group, being root through Docker already. To give another login
-of yours the full view, add it to the group (`usermod -aG devopsy-proc
-<user>`, then log in again), or use `sudo`. Containers have their own
-process list, unchanged.
+Every user sees every process, with its command line, unless `/proc`
+hides them. On a server with devopsy-cli's [project
+users](https://github.com/hanoii/devopsy-cli/blob/main/docs/project-users.md),
+its `--project-users setup` hides them.
 
 ## Security updates
 

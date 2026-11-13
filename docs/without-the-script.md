@@ -23,25 +23,6 @@ systemctl try-restart systemd-resolved
 
 LLMNR is closed once `ss -ltun 'sport = :5355'` lists nothing.
 
-Every user sees only its own processes, root and the `devopsy-proc` group
-all of them. The kernel takes the group by number, and the line names
-`/proc`'s own flags, which `defaults` would drop at the next boot. polkit
-reads its callers' processes, so it goes in the group too:
-
-```sh
-groupadd --system devopsy-proc
-gid=$(getent group devopsy-proc | cut -d: -f3)
-echo "proc /proc proc nosuid,nodev,noexec,hidepid=invisible,gid=$gid 0 0" >> /etc/fstab
-mount -o remount,hidepid=invisible,gid=$gid /proc
-mkdir -p /etc/systemd/system/polkit.service.d
-printf '[Service]\nSupplementaryGroups=devopsy-proc\n' > /etc/systemd/system/polkit.service.d/90-devopsy.conf
-systemctl daemon-reload
-systemctl try-restart polkit
-```
-
-Another user's processes are gone from its `ps`, while `findmnt /proc`
-shows `hidepid=invisible`.
-
 The kernel's arguments, applied by the next reboot. With
 `DEVOPSY_KDUMP=off`, and only where `/etc/default/grub.d/kdump-tools.cfg`
 exists, also the `crashkernel=` line and kdump-tools:
@@ -116,7 +97,7 @@ tunnel.
 
 ```sh
 useradd --create-home --shell /bin/bash devopsy
-usermod -aG docker,devopsy-proc devopsy
+usermod -aG docker devopsy
 install -d -m 700 -o devopsy -g devopsy /home/devopsy/.ssh
 install -m 600 -o devopsy -g devopsy /root/.ssh/authorized_keys /home/devopsy/.ssh/
 
