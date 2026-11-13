@@ -296,7 +296,56 @@ test_one() {
     fail "the fourth run made or turned on a swap file that was on already"
   fi
   rm -f "$out/$name.second"
+
+  user_root_config
   echo "== $base: ok"
+}
+
+# user_root_config: the deploy user's devopsy config, setup.sh's block in it
+# (the marker and releases: root) with lines after it, as devopsy appends
+# its own (door:): the same root rewrites nothing, another replaces the
+# block alone, none removes it and leaves the rest unmarked, which no run
+# touches again, and a file left with blank lines alone goes. The step runs
+# alone (user_root), sparing five whole runs, each with its apt and devopsy
+# upgrades; in test_one's scope (x, fail, c, out, name).
+user_root_config() {
+  local config=/home/devopsy/.config/devopsy/config.yaml marker='# Written by devopsy-server (DEVOPSY_ROOT).'
+  local rest=$'\n# kept as it is\ndoor:\n  space: /var/lib/devopsy-door\n' log=$out/$name.root
+  # shellcheck disable=SC2016 # expanded in the container
+  [ "$(tail -n 1 setup.sh)" = 'main "$@"' ] || fail "setup.sh does not end with main \"\$@\": its step cannot run alone"
+  # user_root <root>: step_user_root alone, with DEVOPSY_ROOT=<root>.
+  user_root() {
+    # shellcheck disable=SC2016 # expanded in the container
+    x env DEVOPSY_USER=devopsy DEVOPSY_ROOT="$1" bash -c 'source <(sed "\$d" /src/setup.sh) && step_user_root' >"$log" 2>&1 || {
+      cat "$log"
+      fail "step_user_root failed with DEVOPSY_ROOT=$1"
+    }
+  }
+  plant() {
+    docker exec -i "$c" sh -c "mkdir -p ${config%/*} && cat >$config && chown devopsy: $config && chmod 644 $config"
+  }
+  # has <what>: the config is stdin, byte for byte, the deploy user's, mode 644.
+  has() {
+    docker exec -i "$c" cmp -s - "$config" || fail "$1: the config is now: $(x cat "$config")"
+    [ "$(x stat -c %U:%a "$config")" = devopsy:644 ] || fail "$1: the config is $(x stat -c %U:%a "$config"), not devopsy:644"
+  }
+
+  echo "== $base: the deploy user's config, setup.sh's block and lines after it"
+  plant < <(printf '%s\nreleases:\n  root: /srv\n%s' "$marker" "$rest")
+  user_root /srv
+  if grep 'wrote ' "$log"; then fail "the same root rewrote the config"; fi
+  has "the same root" < <(printf '%s\nreleases:\n  root: /srv\n%s' "$marker" "$rest")
+  user_root /data
+  has "another root" < <(printf '%s\nreleases:\n  root: /data\n%s' "$marker" "$rest")
+  user_root ''
+  grep -q 'releases live in /home/devopsy again' "$log" || fail "no root did not say releases live in the home again"
+  has "no root" < <(printf '%s' "$rest")
+  user_root /srv
+  has "a root, the config no longer marked" < <(printf '%s' "$rest")
+  plant < <(printf '%s\nreleases:\n  root: /srv\n\n  \n' "$marker")
+  user_root ''
+  if x test -e "$config"; then fail "no root left a config of blank lines: $(x cat "$config")"; fi
+  rm -f "$log"
 }
 
 # Indexed, not associative: macOS's bash 3.2 has none.
