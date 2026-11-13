@@ -197,8 +197,7 @@ test_one() {
 
   # An older setup.sh's saved file, its DEVOPSY_* keys ignored: the first
   # run below keeps kdump and makes no user deploy.
-  # BUG (review, round 1): --help fails on it (exit 1): usage's grep of the
-  # saved DEVOPSY_SERVER_* keys finds none, and pipefail fails the pipe.
+  # --help works with it, though it holds no DEVOPSY_SERVER_* key.
   x sh -c 'mkdir -p /etc/devopsy && printf "%s\n" "DEVOPSY_USER=deploy" "DEVOPSY_KDUMP=off" >/etc/devopsy/server.env'
   x bash /src/setup.sh --help >/dev/null || fail "--help failed with an older setup.sh's saved file"
 
@@ -278,7 +277,8 @@ test_one() {
   # key another file: apt refuses every source until it goes.
   # shellcheck disable=SC2016 # expanded in the container
   x sh -c 'cp /etc/apt/keyrings/docker.asc /etc/apt/keyrings/docker-old.asc && . /etc/os-release &&
-    echo "deb [signed-by=/etc/apt/keyrings/docker-old.asc] https://download.docker.com/linux/$ID $VERSION_CODENAME stable" >/etc/apt/sources.list.d/docker.list'
+    echo "deb [signed-by=/etc/apt/keyrings/docker-old.asc] https://download.docker.com/linux/$ID $VERSION_CODENAME stable" >/etc/apt/sources.list.d/docker.list &&
+    echo "# deb https://download.docker.com/linux/$ID $VERSION_CODENAME stable" >/etc/apt/sources.list.d/other.list'
 
   echo "== $base: third run, --yes at a terminal, DEVOPSY_SERVER_KDUMP=off, another list of Docker's"
   x cp /etc/docker/daemon.json /tmp/daemon.before
@@ -290,6 +290,7 @@ test_one() {
   if grep -F ']: ' "$out/$name.third"; then fail "the third run asked, with --yes"; fi
   rm -f "$out/$name.third"
   if x test -e /etc/apt/sources.list.d/docker.list; then fail "the other list of Docker's repository is still there"; fi
+  x test -e /etc/apt/sources.list.d/other.list || fail "a list that only mentions Docker's repository in a comment was removed"
   x cmp -s /tmp/daemon.before /etc/docker/daemon.json || fail "setup.sh changed daemon.json after --server-setup"
   [ "$(x systemctl show -p InvocationID --value docker)" = "$invocation" ] || fail "setup.sh restarted Docker after --server-setup"
   x systemctl is-active --quiet docker || fail "Docker is not running after the third run"
@@ -325,13 +326,9 @@ test_one() {
   fi
   rm -f "$out/$name.second"
 
-  # BUG (review, round 1): a drop-in after setup.sh's that takes
-  # crashkernel= out again (an admin's, or the zz-devopsy.cfg an older
-  # setup.sh wrote with DEVOPSY_KDUMP=off, which its servers keep) leaves
-  # GRUB's config without it whatever update-grub does: with
-  # DEVOPSY_SERVER_KDUMP=on, the default, every run updates GRUB, says
-  # kdump comes back and raises the restart flag, for a reboot that
-  # changes nothing.
+  # A drop-in after setup.sh's that takes crashkernel= out again (an
+  # admin's, or the zz-devopsy.cfg of an older setup.sh's) is warned of,
+  # and asks for no reboot that would change nothing.
   echo "== $base: DEVOPSY_SERVER_KDUMP=on under a later drop-in that takes crashkernel= out"
   docker exec -i "$c" sh -c 'cat >/etc/default/grub.d/zz-other.cfg' <<'EOF'
 GRUB_CMDLINE_LINUX_DEFAULT=$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed "s/crashkernel=[^ ]*//g")
@@ -347,10 +344,9 @@ EOF
   x rm -f /etc/default/grub.d/zz-other.cfg
   rm -f "$out/$name.step"
 
-  # BUG (review, round 1): a swap size the disk cannot hold fails at
-  # fallocate, which leaves what fit in /swapfile.new (test/fakes/fallocate,
-  # as the real one on ext4 and XFS): the disk full under the running
-  # sites, until the next run removes it and fills it again.
+  # A swap size the disk cannot hold is refused before anything changes,
+  # never a fallocate that leaves what fit (test/fakes/fallocate, as the
+  # real one on ext4 and XFS) filling the disk under the sites.
   echo "== $base: a swap size larger than the free disk"
   local big
   big=$(($(x df --output=avail -B1G / | tail -n 1) + 10))G
@@ -375,10 +371,8 @@ swap_resized() {
   local log=$out/$name.fifth
   # shellcheck disable=SC2016 # the line itself
   [ "$(tail -n 1 setup.sh)" = 'main "$@"' ] || fail "setup.sh does not end with main \"\$@\": its steps cannot run alone"
-  # BUG (review, round 1): Ctrl-D at a question is no answer, and setup.sh
-  # says so ("no answer to"), yet goes on: ask's die ends only its own
-  # command substitution, an argument of normal_setting's, and the empty
-  # answer is the swap's none, saved, the server's swap file removed.
+  # Ctrl-D at a question is no answer: the run stops, nothing saved, the
+  # swap as it was, never the empty answer taken for the swap's none.
   echo "== $base: Ctrl-D at the swap's question stops the run, the swap as it was"
   local code=0
   at_tty "$log" '\004\n\n' 'bash /src/setup.sh' || code=$?
@@ -386,9 +380,8 @@ swap_resized() {
     fail "Ctrl-D at the swap's question was saved as an answer: $(x grep SWAP /etc/devopsy/server.env)"
   [ "$(x swapon --show=NAME --noheadings)" = /swapfile ] || fail "Ctrl-D at the swap's question removed the swap file"
   [ "$code" != 0 ] || fail "the run went on after no answer to a question"
-  # BUG (review, round 1): a resize renames /swapfile.new while it is on,
-  # which the kernel refuses (test/fakes/mv): the run fails with the old
-  # file off, and so does every run after it.
+  # A resize renames no file while it is on, which the kernel refuses
+  # (test/fakes/mv).
   echo "== $base: fifth run, at a terminal, the swap file resized to 128M"
   x sh -c ': >/tmp/swap.calls'
   at_tty "$log" '2g\n128M\n\n\n' 'bash /src/setup.sh' || {
@@ -398,18 +391,31 @@ swap_resized() {
   grep -qF 'swap file size, like 2G or 512M, or none [64M]: ' "$log" || fail "the fifth run did not offer the saved swap"
   grep -qF "is a size in M or G, like 2G or 512M, or none, not '2g'" "$log" || fail "the fifth run took a wrong size"
   rm -f "$log"
-  # The new file on before the old one off, then renamed.
-  [ "$(x grep -v -e --show= /tmp/swap.calls | tr '\n' ,)" = "fallocate -l 128M /swapfile.new,mkswap /swapfile.new,swapon /swapfile.new,swapoff /swapfile," ] ||
-    fail "the resize was not new on, then old off: $(x cat /tmp/swap.calls)"
+  # A stand-in of the new size on before the old file goes off, the new
+  # /swapfile made off and turned on, then the stand-in off.
+  [ "$(x grep -v -e --show= /tmp/swap.calls | tr '\n' ,)" = "fallocate -l 128M /swapfile.tmp.new,mkswap /swapfile.tmp.new,swapon /swapfile.tmp,swapoff /swapfile,fallocate -l 128M /swapfile.new,mkswap /swapfile.new,swapon /swapfile,swapoff /swapfile.tmp," ] ||
+    fail "the resize was not a stand-in on, the old off, the new on, the stand-in off: $(x cat /tmp/swap.calls)"
+  if x test -e /swapfile.tmp; then fail "the resize left its stand-in"; fi
   [ "$(x stat -c %s /swapfile)" = 134217728 ] || fail "/swapfile is not 128M"
   [ "$(x swapon --show=NAME --noheadings)" = /swapfile ] || fail "the swap on is not /swapfile alone: $(x swapon --show=NAME --noheadings)"
   [ "$(x grep -c '^/swapfile ' /etc/fstab)" = 1 ] || fail "/etc/fstab has not one line for /swapfile"
   x grep -qx 'DEVOPSY_SERVER_SWAP=128M' /etc/devopsy/server.env || fail "128M was not saved"
 
-  echo "== $base: a resize cut after the old file went off, then none"
-  x sh -c 'truncate -s 256M /swapfile.new && swapon /swapfile.new && swapoff /swapfile'
+  echo "== $base: a resize the memory cannot take, one cut once the old file went, then none"
+  # swapoff's fake fails while /tmp/swapoff.fail is there, as the real one
+  # does when the pages have nowhere to go: the old size stays, said, and
+  # the run goes on.
+  x sh -c ': >/tmp/swapoff.fail'
   step_alone swap DEVOPSY_SERVER_SWAP=256M
-  if x test -e /swapfile.new; then fail "the cut resize left /swapfile.new"; fi
+  x rm /tmp/swapoff.fail
+  grep -q 'it keeps its size' "$out/$name.step" || fail "a resize the memory cannot take was not said"
+  [ "$(x stat -c %s /swapfile)" = 134217728 ] || fail "a resize the memory cannot take changed /swapfile"
+  # The stand-in's own swapoff failed too: it stays on, for the next run.
+  x sh -c 'swapoff /swapfile.tmp && rm /swapfile.tmp'
+  # Cut with the stand-in on and the old file gone.
+  x sh -c 'truncate -s 256M /swapfile.tmp && swapon /swapfile.tmp && swapoff /swapfile && rm /swapfile && : >/swapfile.new'
+  step_alone swap DEVOPSY_SERVER_SWAP=256M
+  if x test -e /swapfile.tmp || x test -e /swapfile.new; then fail "the cut resize left /swapfile.tmp or /swapfile.new"; fi
   [ "$(x stat -c %s /swapfile)" = 268435456 ] || fail "the cut resize did not finish at 256M"
   [ "$(x swapon --show=NAME --noheadings)" = /swapfile ] || fail "after the cut resize, the swap on is not /swapfile alone"
   step_alone swap DEVOPSY_SERVER_SWAP=
@@ -424,6 +430,15 @@ swap_resized() {
   # shellcheck disable=SC2016 # expanded in the container
   [ "$(x bash -c 'source <(sed "\$d" /src/setup.sh) && for kb in 470000 980000 2000000 4000000 16000000; do printf "%s," "$(swap_for_ram $kb)"; done')" = 512M,1G,2G,2G,, ] ||
     fail "the swap offered for the memory is not 512M, 1G, 2G, 2G, none"
+
+  # The deploy user is fixed once it exists, never a saved name no user has
+  # yet (a first run stopped before its user step).
+  # shellcheck disable=SC2016 # expanded in the container
+  [ "$(x bash -c 'source <(sed "\$d" /src/setup.sh) && saved_DEVOPSY_SERVER_USER=deply && check_setting DEVOPSY_SERVER_USER deploy && echo ok')" = ok ] ||
+    fail "a saved deploy user that does not exist refused another"
+  # shellcheck disable=SC2016 # expanded in the container
+  x bash -c 'source <(sed "\$d" /src/setup.sh) && saved_DEVOPSY_SERVER_USER=devopsy && check_setting DEVOPSY_SERVER_USER deploy' | grep -q 'this server.s deploy user' ||
+    fail "another deploy user than the one that exists was not refused"
 }
 
 # Indexed, not associative: macOS's bash 3.2 has none.

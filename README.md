@@ -65,7 +65,7 @@ curl -fsSL .../setup.sh | bash -s -- --help
 | Variable                          | Default   | |
 | --------------------------------- | --------- | - |
 | `DEVOPSY_SERVER_USER`             | `devopsy` | The deploy user, the one devopsy logs in as. Asked on the first run only, and never changed after it. |
-| `DEVOPSY_SERVER_SWAP`             | by memory | Size of `/swapfile`, like `2G` or `512M`, or `none`. A new size resizes it, and `none` removes the one `setup.sh` made. By default: as much as the memory up to 2.5 GB, `2G` up to 8.5 GB, none above that. A server with a swap of its own is offered none and keeps it; a size given takes over its `/swapfile`, if that is what it has. |
+| `DEVOPSY_SERVER_SWAP`             | by memory | Size of `/swapfile`, like `2G` or `512M`, or `none`. A new size resizes it with the swap kept on, which takes room on `/` for a second file of the new size while it runs; a size the disk cannot hold is asked again. `none` removes the one `setup.sh` made. By default: as much as the memory up to 2.5 GB, `2G` up to 8.5 GB, none above that. A server with a swap of its own is offered none and keeps it; a size given takes over its `/swapfile`, if that is what it has. |
 | `DEVOPSY_SERVER_AUTO_REBOOT_TIME` | `never`   | Reboot after upgrades that need it, at this time, like `04:00`. |
 | `DEVOPSY_SERVER_KDUMP`            | `on`      | `off` frees the memory kdump keeps for a crash kernel and disables kdump-tools, both from the next reboot. `on` puts both back. Asked only where the image has kdump-tools. |
 | `DEVOPSY_SERVER_FORCE`            | `0`       | `1` runs on a distribution other than Debian 13 or Ubuntu 26.04 without asking. Not saved. |

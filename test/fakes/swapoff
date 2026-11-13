@@ -1,6 +1,16 @@
 #!/bin/sh
-# swapoff's fake (test/run.sh): the file off swapon's list.
+# swapoff's fake (test/run.sh): the file off swapon's list. It fails on a
+# file that is not on (EINVAL), and while /tmp/swapoff.fail is there, as
+# the real one does when the pages have nowhere to go (ENOMEM).
 echo "swapoff $*" >>/tmp/swap.calls
 i=$(stat -c %i "$1")
+if ! grep -qx "$i" /tmp/swaps 2>/dev/null; then
+  echo "swapoff: $1: swapoff failed: Invalid argument" >&2
+  exit 1
+fi
+if [ -e /tmp/swapoff.fail ]; then
+  echo "swapoff: $1: swapoff failed: Cannot allocate memory" >&2
+  exit 1
+fi
 grep -vx "$i" /tmp/swaps >/tmp/swaps.new || true
-mv /tmp/swaps.new /tmp/swaps
+/bin/mv /tmp/swaps.new /tmp/swaps
