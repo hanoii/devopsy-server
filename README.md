@@ -6,7 +6,25 @@ automatic security upgrades and devopsy itself. Projects are then released
 onto it with devopsy, starting with
 [Traefik](https://github.com/hanoii/devopsy-template-traefik).
 
+## A new server
+
+A new server can start on XFS: create it with
+[`cloud-init.yaml`](cloud-init.yaml) as its user data, and on its first
+boots it converts the root from ext4 to XFS, in about three minutes and
+two reboots of its own, before `setup.sh` runs. It is tried on
+DigitalOcean droplets and Vultr instances, with their Debian 13 and
+Ubuntu 26.04 images; [An XFS root](docs/xfs.md) has the steps for each.
+
+> [!TIP]
+> XFS copies files with reflinks, so a copy of data on the server (an
+> environment's, with its database) takes seconds at any size. The
+> conversion is only for a new server, before anything is on its disk.
+
 ## Usage
+
+> [!NOTE]
+> To set up a server by hand instead, [Without the
+> script](docs/without-the-script.md) has the same steps, run as root.
 
 As root on the server:
 
@@ -35,9 +53,6 @@ users](https://github.com/hanoii/devopsy-cli/blob/main/docs/project-users.md)).
 Then release Traefik to the server from a devopsy-template-traefik
 checkout (`devopsy @<server>:prod setup`; see the Setup section of its
 README), and your projects after it.
-
-On a new server, `cloud-init.yaml` can first convert its root to XFS
-([An XFS root](docs/xfs.md)).
 
 ## Reruns
 
