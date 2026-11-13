@@ -353,6 +353,8 @@ EOF
   x cp /etc/devopsy/server.env /tmp/server.env.before
   x env DEVOPSY_SERVER_SWAP="$big" bash /src/setup.sh >"$out/$name.big" 2>&1 || true
   cat "$out/$name.big"
+  grep -qE "DEVOPSY_SERVER_SWAP $big needs [0-9]+[MG] free on /, which has [0-9]+[MG]" "$out/$name.big" ||
+    fail "a swap of $big, more than the free disk, was not refused with the room it needs"
   rm -f "$out/$name.big"
   x cp /tmp/server.env.before /etc/devopsy/server.env
   if x test -e /swapfile.new; then fail "a swap of $big, more than the free disk, left /swapfile.new filling it"; fi

@@ -184,7 +184,7 @@ check_setting() {
       if ! [[ $value =~ ^([1-9][0-9]*[MG])?$ ]]; then
         echo "$key is a size in M or G, like 2G or 512M, or none, not '$value'"
       elif need=$(swap_room "$value") && free=$(df --output=avail -B1 / | tail -n 1) && [ "$need" -gt "$free" ]; then
-        echo "$key $value needs $(swap_size_down "$need") free on /, which has $(swap_size_down "$free")"
+        echo "$key $value needs $(human_size "$need") free on /, which has $(human_size "$free")"
       fi
       ;;
     DEVOPSY_SERVER_AUTO_REBOOT_TIME)
