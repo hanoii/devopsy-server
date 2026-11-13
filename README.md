@@ -34,10 +34,12 @@ As root on the server:
 curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh | bash
 ```
 
-It asks for the deploy user, the swap size and when to reboot after
-upgrades that need it. If the image has kdump, it also asks whether to
-keep the memory kdump reserves. Each question shows its default in
-brackets; press Enter to keep it.
+It first checks you want to go on, since it installs the base
+packages, Docker and devopsy, and upgrades them on later runs. Then it
+asks for the deploy user, the swap size, whether to install security
+updates automatically, and when to reboot after upgrades that need it.
+If the image has kdump, it also asks whether to keep the memory kdump
+reserves. Each question shows its default; press Enter to keep it.
 
 Then, from your own machine, run devopsy's
 [`--server-setup`](https://github.com/hanoii/devopsy-cli/blob/main/docs/servers.md#--server-setup)
@@ -85,7 +87,8 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh
 | --------------------------------- | --------- | - |
 | `DEVOPSY_SERVER_USER`             | `devopsy` | The deploy user devopsy logs in as. Only asked on the first run, and never changed after that. |
 | `DEVOPSY_SERVER_SWAP`             | by memory | Size of `/swapfile`, like `2G` or `512M`, or `none`. A new size resizes it without turning swap off, which needs room on `/` for a second file of the new size while it runs; if the disk can't fit it, you're asked again. `none` removes the swap file `setup.sh` made. The default goes by memory: the same as the memory up to 2.5 GB, `2G` up to 8.5 GB, and none above that. If the server already has a swap of its own, the default is none and it's left alone; giving a size takes over its `/swapfile`, if that's what it uses. |
-| `DEVOPSY_SERVER_AUTO_REBOOT_TIME` | `never`   | When to reboot after upgrades that need it, like `04:00`. |
+| `DEVOPSY_SERVER_UPGRADES`         | `on`      | `on` installs security updates automatically with unattended-upgrades. `off` turns that off again. |
+| `DEVOPSY_SERVER_AUTO_REBOOT_TIME` | `never`   | When to reboot after upgrades that need it, like `04:00`. Not asked while upgrades are off, since nothing reboots on its own then. |
 | `DEVOPSY_SERVER_KDUMP`            | `on`      | `off` frees the memory kdump reserves for a crash kernel and turns off kdump-tools, from the next reboot. `on` brings both back. Only asked if the image has kdump-tools. |
 | `DEVOPSY_SERVER_FORCE`            | `0`       | `1` runs on a distribution other than Debian 13 or Ubuntu 26.04 without asking. Not saved. |
 
@@ -97,7 +100,7 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-server/main/setup.sh
 | `swap`     | Creates, resizes or removes `/swapfile`. |
 | `docker`   | Installs Docker Engine with the Buildx and Compose plugins from Docker's apt repository, and `apparmor`. |
 | `user`     | Creates the deploy user in the `docker` group and gives it root's SSH authorized keys. |
-| `upgrades` | Turns on daily unattended security upgrades, and the reboot after them at the time you set. |
+| `upgrades` | Turns on daily unattended security upgrades, and the reboot after them at the time you set, or turns them off. |
 | `cli`      | Installs devopsy in `/usr/local/lib/devopsy`, owned by the deploy user and linked from `/usr/local/bin`; a rerun upgrades it. |
 
 ## More
